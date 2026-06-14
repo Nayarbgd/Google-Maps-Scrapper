@@ -41,34 +41,50 @@ def setup_logging():
 
 def _check_website(browser, url: str, domain_cache: dict):
     """
-    Opens the URL in a fresh browser context and returns (status, reason).
-    Conservative two-attempt website checker.
+    4-step website checker. Requires at least TWO independent failures before
+    classifying a site as broken. Prefers false negatives (missing a broken site)
+    over false positives (flagging a working site as broken).
+
+    Steps:
+        1. https://domain  — 15 s timeout
+        2. https://domain  — retry,  15 s timeout
+        3. http://domain   — HTTP fallback, 15 s timeout
+        4. Fresh browser context, https  — 15 s timeout
+
     Returns (website_status, website_error_reason, website_confidence).
-    Prefers false negatives over false positives — a working site is never
-    flagged as broken on a single failure.
 
     Statuses and confidence:
-        Working          →  0%
-        Protected Website→ 50%
-        Timeout          → 85%
-        Server Error     → 90%
-        Parked Domain    → 95%
-        Domain Not Found →100%
+        Working                  →  0%
+        Accessible but Protected →  0%
+        Very Slow but Working    →  0%
+        Domain Not Found         → 100%
+        Parked Domain            → 100%
+        Server Unreachable       →  95%
+        Server Error             →  90%
     """
     _PARKED_PHRASES = [
         "this domain is for sale", "buy this domain", "sedo",
         "parked domain", "domain parking", "godaddy parked",
-        "this website is coming soon", "coming soon",
+        "hugedomains.com", "dan.com/buy",
         "purchase this domain", "domain may be for sale",
         "domain for sale",
     ]
     _PROTECTED_PHRASES = [
-        "checking your browser", "just a moment", "cloudflare",
+        "checking your browser", "just a moment",
         "bot protection", "verify you are human",
         "please complete the security check",
         "enable javascript and cookies",
         "you need to enable javascript",
+        "ddos protection by", "are you a robot",
+        "please verify you are a human",
+        "one more step", "ray id",
     ]
+
+    _UA = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    )
 
     norm_url = url.strip()
     if not norm_url.startswith(("http://", "https://")):
@@ -77,68 +93,97 @@ def _check_website(browser, url: str, domain_cache: dict):
     try:
         parsed = urlparse(norm_url)
         domain = re.sub(r"^www\.", "", parsed.netloc.lower())
+        https_url = "https://" + parsed.netloc + (parsed.path or "/")
+        http_url  = "http://"  + parsed.netloc + (parsed.path or "/")
+        if parsed.query:
+            https_url += "?" + parsed.query
+            http_url  += "?" + parsed.query
     except Exception:
-        domain = norm_url
+        domain     = norm_url
+        https_url  = norm_url
+        http_url   = norm_url.replace("https://", "http://", 1)
 
     if domain in domain_cache:
         return domain_cache[domain]
 
-    _UA = (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    )
-
-    def _single_attempt():
+    def _attempt(attempt_url):
+        """
+        Single attempt. Returns a dict:
+            raw:    'working' | 'protected' | 'dns_fail' | 'conn_refused' |
+                    'server_error' | 'parked' | 'timeout' | 'error'
+            code:   HTTP status int or None
+            detail: human-readable description
+        """
         ctx = None
         try:
             ctx = browser.new_context(ignore_https_errors=True, user_agent=_UA)
-            pg = ctx.new_page()
+            pg  = ctx.new_page()
             try:
-                response = pg.goto(norm_url, timeout=10000, wait_until="networkidle")
+                response = pg.goto(attempt_url, timeout=15000, wait_until="load")
             except Exception as exc:
                 err = str(exc).lower()
-                if "name_not_resolved" in err or "err_name_not_resolved" in err:
-                    return ("Domain Not Found", "The domain does not exist.", 100)
-                if "timed_out" in err or "err_timed_out" in err or "timeout" in err:
-                    return ("Timeout", "The website did not respond within 10 seconds.", 85)
-                if "connection_refused" in err or "err_connection_refused" in err:
-                    return ("Server Error", "The server refused the connection.", 90)
-                if "ssl" in err or "cert" in err:
-                    return ("Server Error", "SSL/certificate error.", 85)
-                return ("Broken", "The website failed to load.", 75)
+                if any(k in err for k in ("name_not_resolved", "nxdomain", "dns_probe",
+                                          "err_name_not_resolved")):
+                    return {"raw": "dns_fail",    "code": None,
+                            "detail": "DNS resolution failed — domain does not exist"}
+                if any(k in err for k in ("connection_refused", "err_connection_refused")):
+                    return {"raw": "conn_refused", "code": None,
+                            "detail": "Connection refused by the server"}
+                if any(k in err for k in ("timed_out", "err_timed_out", "timeout")):
+                    return {"raw": "timeout",     "code": None,
+                            "detail": "No response within 15 seconds"}
+                return {"raw": "error", "code": None,
+                        "detail": f"Network error: {str(exc)[:120]}"}
 
             if response is None:
-                return ("Broken", "The website did not return a response.", 75)
+                return {"raw": "error", "code": None, "detail": "Server returned no response"}
 
             code = response.status
 
-            if code in (500, 502, 503) or (code >= 500):
-                return ("Server Error", f"The website server returned an error (HTTP {code}).", 90)
+            # 301 / 302 / 307 / 308 — redirects are completely normal
+            if code in (301, 302, 307, 308):
+                return {"raw": "working", "code": code, "detail": f"Redirect ({code}) — normal"}
 
+            # 403 — access restricted, not broken
             if code == 403:
-                return ("Protected Website", "The website requires human verification (access restricted).", 50)
+                return {"raw": "protected", "code": code,
+                        "detail": "Access restricted (HTTP 403) — not broken"}
 
+            # Read body for content analysis
             try:
                 body = pg.content().lower()
             except Exception:
                 body = ""
 
+            # Bot-protection / captcha pages — accessible but protected
             for phrase in _PROTECTED_PHRASES:
                 if phrase in body:
-                    return ("Protected Website", "The website requires browser verification (bot protection active).", 50)
+                    return {"raw": "protected", "code": code,
+                            "detail": "Bot protection or browser-check page detected"}
 
+            # Parked domain
             for phrase in _PARKED_PHRASES:
                 if phrase in body:
-                    return ("Parked Domain", "The domain is parked or for sale.", 95)
+                    return {"raw": "parked", "code": code,
+                            "detail": "Domain appears to be parked or for sale"}
 
+            # Definitive server errors
+            if code in (404, 500, 502, 503) or code >= 500:
+                return {"raw": "server_error", "code": code,
+                        "detail": f"Server returned error (HTTP {code})"}
+
+            # Any other successful-ish response
             if code < 400:
-                return ("Working", "", 0)
+                return {"raw": "working", "code": code,
+                        "detail": f"Loaded successfully (HTTP {code})"}
 
-            return ("Broken", f"The website returned an error (HTTP {code}).", 75)
+            # Other 4xx
+            return {"raw": "server_error", "code": code,
+                    "detail": f"Server returned error (HTTP {code})"}
 
-        except Exception:
-            return ("Broken", "Could not connect to the website.", 70)
+        except Exception as exc:
+            return {"raw": "error", "code": None,
+                    "detail": f"Unexpected error: {str(exc)[:120]}"}
         finally:
             if ctx:
                 try:
@@ -146,37 +191,84 @@ def _check_website(browser, url: str, domain_cache: dict):
                 except Exception:
                     pass
 
-    # ── Attempt 1 ──
-    res1 = _single_attempt()
+    # ── Run up to 4 attempts ───────────────────────────────────────────────────
+    attempts = []
+    urls_seq  = [https_url, https_url, http_url, https_url]
 
-    # Domain Not Found is definitive — no retry needed
-    if res1[0] == "Domain Not Found":
-        domain_cache[domain] = res1
-        return res1
+    for step_num, step_url in enumerate(urls_seq, start=1):
+        a = _attempt(step_url)
+        attempts.append(a)
+        logging.info(
+            f"WS-check step {step_num}/4 ({step_url}): raw={a['raw']} "
+            f"code={a['code']} — {a['detail']}"
+        )
 
-    # Working or Protected — conservative; accept immediately
-    if res1[0] in ("Working", "Protected Website"):
-        domain_cache[domain] = res1
-        return res1
+        # Any positive signal → stop early, site is accessible
+        if a["raw"] in ("working", "protected"):
+            status = "Working" if a["raw"] == "working" else "Accessible but Protected"
+            reason = a["detail"]
+            conf   = 0
+            _log_debug(domain, attempts, status)
+            result = (status, reason, conf)
+            domain_cache[domain] = result
+            return result
 
-    # Any other failure → wait 2s and retry once
-    time.sleep(2)
-    res2 = _single_attempt()
+    # ── Aggregate all 4 failed attempts ───────────────────────────────────────
+    raw_counts: Dict[str, int] = {}
+    for a in attempts:
+        raw_counts[a["raw"]] = raw_counts.get(a["raw"], 0) + 1
 
-    # If second attempt is Working or Protected, trust it
-    if res2[0] in ("Working", "Protected Website"):
-        final = res2
-    # Both agree
-    elif res1[0] == res2[0]:
-        final = res1
+    dns_fails     = raw_counts.get("dns_fail",     0)
+    conn_refused  = raw_counts.get("conn_refused",  0)
+    server_errors = raw_counts.get("server_error",  0)
+    parked_hits   = raw_counts.get("parked",        0)
+    timeouts      = raw_counts.get("timeout",       0)
+
+    # DNS failure: even a single hit is conclusive (domain literally doesn't exist)
+    if dns_fails >= 1:
+        status = "Domain Not Found"
+        reason = "The domain does not exist (DNS resolution failed on multiple attempts)."
+        conf   = 100
+    # Parked domain: one confident detection is enough (body content is reliable)
+    elif parked_hits >= 1:
+        status = "Parked Domain"
+        reason = "The domain is parked or for sale."
+        conf   = 100
+    # Connection refused twice → server is down
+    elif conn_refused >= 2:
+        status = "Server Unreachable"
+        reason = "The server refused all connection attempts."
+        conf   = 95
+    # Server errors confirmed twice → real error
+    elif server_errors >= 2:
+        codes  = [a["code"] for a in attempts if a["raw"] == "server_error" and a["code"]]
+        code_s = "/".join(str(c) for c in codes[:2]) if codes else "unknown"
+        status = "Server Error"
+        reason = f"The server returned errors on multiple attempts (HTTP {code_s})."
+        conf   = 90
+    # All attempts timed out — very slow, but we can't confirm it's broken
+    elif timeouts == len(attempts):
+        status = "Very Slow but Working"
+        reason = "The website did not respond within 15 seconds on any attempt, but may still be accessible."
+        conf   = 0
     else:
-        # Pick the more severe of the two results
-        _sev = {"Domain Not Found": 6, "Parked Domain": 5,
-                "Server Error": 4, "Timeout": 3, "Broken": 2}
-        final = res1 if _sev.get(res1[0], 1) >= _sev.get(res2[0], 1) else res2
+        # Mixed failures — not enough evidence; treat as possibly working
+        status = "Very Slow but Working"
+        reason = "The website could not be fully loaded but there is insufficient evidence it is broken."
+        conf   = 0
 
-    domain_cache[domain] = final
-    return final
+    _log_debug(domain, attempts, status)
+    result = (status, reason, conf)
+    domain_cache[domain] = result
+    return result
+
+
+def _log_debug(domain: str, attempts: list, final: str) -> None:
+    """Write a structured debug log line for every website check."""
+    parts = [f"WS-RESULT domain={domain} final={final!r}"]
+    for i, a in enumerate(attempts, start=1):
+        parts.append(f"attempt_{i}=(raw={a['raw']} code={a['code']})")
+    logging.info(" | ".join(parts))
 
 
 def extract_text(page: Page, xpath: str) -> str:
@@ -445,7 +537,7 @@ def scrape_places(
                                 skip = True
 
                         if not skip and filters.get("only_broken_websites"):
-                            _broken = {"Timeout", "Domain Not Found", "Parked Domain", "Server Error"}
+                            _broken = {"Domain Not Found", "Server Unreachable", "Server Error", "Parked Domain"}
                             if place.website_status not in _broken:
                                 filter_count += 1
                                 skip = True

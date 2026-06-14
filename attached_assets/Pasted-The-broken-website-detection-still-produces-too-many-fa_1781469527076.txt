@@ -1,0 +1,205 @@
+The broken website detection still produces too many false positives.
+
+Completely redesign the validation logic.
+
+The goal is NOT to detect websites that bots cannot load.
+
+The goal is to detect websites that a normal human user would consider truly broken.
+
+Accuracy is more important than speed.
+
+Increase timeout to:
+
+15 seconds
+
+Many legitimate business websites take 2-8 seconds to load.
+
+Do not classify a website as broken simply because it is slow.
+
+Step 1:
+
+Try:
+
+https://domain.com
+
+Wait up to 15 seconds.
+
+Step 2:
+
+If failed:
+
+Try again.
+
+Wait another 15 seconds.
+
+Step 3:
+
+If failed:
+
+Try:
+
+http://domain.com
+
+Wait up to 15 seconds.
+
+Step 4:
+
+If failed:
+
+Open the website in a completely new browser context.
+
+Wait another 15 seconds.
+
+A website should NEVER be classified as broken after only one attempt.
+
+Always allow:
+
+301
+302
+307
+308
+
+Redirects are normal.
+
+These situations must NOT be classified as broken:
+
+Cloudflare pages
+Cookie popups
+Login pages
+Captcha pages
+"Checking your browser"
+Bot protection pages
+403 errors
+Very slow websites
+Websites requiring JavaScript
+Websites with SSL warnings that still display content
+
+Classify these as:
+
+Accessible but Protected
+
+At least TWO independent tests fail.
+
+AND one of the following is confirmed:
+
+
+
+
+DNS resolution failure:
+
+ERR_NAME_NOT_RESOLVED
+NXDOMAIN
+DNS_PROBE_FINISHED_NXDOMAIN
+
+Status:
+
+Domain Not Found
+
+
+
+
+Connection refused:
+
+ERR_CONNECTION_REFUSED
+
+Status:
+
+Server Unreachable
+
+
+
+
+The website returns:
+
+404
+500
+502
+503
+
+AND the same result occurs twice.
+
+Status:
+
+Server Error
+
+
+
+
+Domain parking is detected.
+
+Examples:
+
+"This domain is for sale"
+"Buy this domain"
+"Sedo"
+"GoDaddy parked domain"
+"This website is coming soon"
+
+Status:
+
+Parked Domain
+
+Working
+
+Accessible but Protected
+
+Very Slow but Working
+
+Domain Not Found
+
+Server Unreachable
+
+Server Error
+
+Parked Domain
+
+The filter:
+
+Only businesses with broken websites
+
+must ONLY include:
+
+Domain Not Found
+Server Unreachable
+Server Error
+Parked Domain
+
+Everything else must be excluded.
+
+Domain Not Found:
+100%
+
+Parked Domain:
+100%
+
+Server Unreachable:
+95%
+
+Server Error:
+90%
+
+Accessible but Protected:
+0%
+
+Very Slow but Working:
+0%
+
+Working:
+0%
+
+For every website test:
+
+Save:
+
+attempt_1_result
+attempt_2_result
+attempt_3_result
+final_classification
+
+Create a debug log.
+
+This will allow us to inspect future false positives.
+
+I prefer missing some broken websites rather than flagging working websites as broken.
+
+A business website should only be marked as broken when there is overwhelming evidence that a human user would also consider it broken.

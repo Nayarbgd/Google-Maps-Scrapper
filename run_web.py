@@ -166,8 +166,9 @@ td.td-opp-high{color:#f87171}
 td.td-opp-med{color:#facc15}
 td.td-opp-low{color:#4ade80}
 td.td-ws-working{color:#4ade80;font-weight:600}
+td.td-ws-protected{color:#facc15;font-weight:600}
+td.td-ws-slow{color:#a78bfa;font-weight:600}
 td.td-ws-broken{color:#f87171;font-weight:600}
-td.td-ws-timeout{color:#f87171;font-weight:600}
 td.td-ws-notfound{color:#f87171;font-weight:600}
 td.td-ws-dim{color:#6b7280}
 .empty-state{text-align:center;padding:60px 20px;color:var(--muted)}
@@ -458,7 +459,7 @@ function hasValidWebsite(place){
   const ws = (place.website||'').trim();
   return ws && ws !== '-' && ws !== '—' && (ws.includes('.')||ws.toLowerCase().includes('http'));
 }
-const _BROKEN_STATUSES = new Set(['Timeout','Domain Not Found','Parked Domain','Server Error']);
+const _BROKEN_STATUSES = new Set(['Domain Not Found','Server Unreachable','Server Error','Parked Domain']);
 function getOpportunity(place){
   const ws = place.website_status||'';
   if(ws && _BROKEN_STATUSES.has(ws))
@@ -474,13 +475,13 @@ function getWsCell(place){
   const s = place.website_status||'';
   if(!s) return {label:'—', cls:'td-ws-dim'};
   const map = {
-    'Working':           {label:'🟢 Working',           cls:'td-ws-working'},
-    'Protected Website': {label:'🟡 Protected',          cls:'td-ws-timeout'},
-    'Timeout':           {label:'🔴 Timeout',            cls:'td-ws-timeout'},
-    'Server Error':      {label:'🔴 Server Error',       cls:'td-ws-broken'},
-    'Parked Domain':     {label:'🔴 Parked Domain',      cls:'td-ws-broken'},
-    'Domain Not Found':  {label:'🔴 Domain Not Found',   cls:'td-ws-notfound'},
-    'Broken':            {label:'🔴 Broken',             cls:'td-ws-broken'},
+    'Working':                  {label:'🟢 Working',                  cls:'td-ws-working'},
+    'Accessible but Protected': {label:'🟡 Protected',                 cls:'td-ws-protected'},
+    'Very Slow but Working':    {label:'🟣 Very Slow',                 cls:'td-ws-slow'},
+    'Domain Not Found':         {label:'🔴 Domain Not Found',          cls:'td-ws-notfound'},
+    'Server Unreachable':       {label:'🔴 Server Unreachable',        cls:'td-ws-broken'},
+    'Server Error':             {label:'🔴 Server Error',              cls:'td-ws-broken'},
+    'Parked Domain':            {label:'🔴 Parked Domain',             cls:'td-ws-broken'},
   };
   return map[s] || {label:s, cls:'td-ws-dim'};
 }
@@ -943,7 +944,7 @@ def delete_session(sid):
 
 # ─── Export ───────────────────────────────────────────────────────────────────
 
-_BROKEN_STATUSES_PY = {"Timeout", "Domain Not Found", "Parked Domain", "Server Error"}
+_BROKEN_STATUSES_PY = {"Domain Not Found", "Server Unreachable", "Server Error", "Parked Domain"}
 
 def _compute_opportunity(row) -> str:
     ws_status = str(row.get("website_status") or "").strip()
