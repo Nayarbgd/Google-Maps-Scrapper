@@ -1004,6 +1004,25 @@ def export_excel():
     return send_file(path, as_attachment=True, download_name=f"results_{ts}.xlsx")
 
 
+@app.route("/debug-results")
+def debug_results():
+    try:
+        sessions = db.list_sessions()
+        if not sessions:
+            return jsonify({"error": "no sessions found"})
+        last_session_id = sessions[0]["id"]
+        places = db.get_session_places(last_session_id)
+        return jsonify([{
+            "name":                 r.get("name", ""),
+            "website":              r.get("website", ""),
+            "website_status":       r.get("website_status", ""),
+            "website_error_reason": r.get("website_error_reason", "N/A"),
+            "website_confidence":   r.get("website_confidence", -1),
+        } for r in places[:20]])
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
 @app.route("/test-url")
 def test_url():
     url = request.args.get("url", "")
