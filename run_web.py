@@ -1012,13 +1012,18 @@ def debug_results():
             return jsonify({"error": "no sessions found"})
         last_session_id = sessions[0]["id"]
         places = db.get_session_places(last_session_id)
-        return jsonify([{
+        rows = [{
             "name":                 r.get("name", ""),
             "website":              r.get("website", ""),
             "website_status":       r.get("website_status", ""),
             "website_error_reason": r.get("website_error_reason", "N/A"),
             "website_confidence":   r.get("website_confidence", -1),
-        } for r in places[:20]])
+        } for r in places[:100]]
+        summary = {}
+        for r in places:
+            s = r.get("website_status") or "N/A"
+            summary[s] = summary.get(s, 0) + 1
+        return jsonify({"results": rows, "summary": summary})
     except Exception as e:
         return jsonify({"error": str(e)})
 
