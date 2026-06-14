@@ -277,7 +277,7 @@ def _check_website(browser, url: str, domain_cache: dict):
             ctx = browser.new_context(ignore_https_errors=True, user_agent=_UA)
             pg  = ctx.new_page()
             try:
-                response = pg.goto(attempt_url, timeout=20000, wait_until="networkidle")
+                response = pg.goto(attempt_url, timeout=25000, wait_until="domcontentloaded")
             except Exception as exc:
                 err = str(exc).lower()
                 if any(k in err for k in ("name_not_resolved", "nxdomain", "dns_probe",
@@ -288,8 +288,8 @@ def _check_website(browser, url: str, domain_cache: dict):
                     return {"raw": "conn_refused", "code": None,
                             "detail": "Playwright: connection refused"}
                 if any(k in err for k in ("timed_out", "err_timed_out", "timeout")):
-                    return {"raw": "timeout", "code": None,
-                            "detail": "Playwright: page did not reach networkidle within 20 s"}
+                    return {"raw": "p2_timeout", "code": None,
+                            "detail": "Playwright: page did not reach domcontentloaded within 25 s"}
                 return {"raw": "error", "code": None,
                         "detail": f"Playwright error: {str(exc)[:120]}"}
 
@@ -425,6 +425,27 @@ def _check_website(browser, url: str, domain_cache: dict):
         result = ("Server Error",
                   "The server is unavailable (HTTP 503 confirmed by both HTTP and browser checks).", 90)
         _log_debug(domain, all_results, "Server Error")
+        domain_cache[domain] = result
+        return result
+
+    # Consistent timeout across both stages → Server Unreachable
+    s1_timeout = s1["raw"] == "timeout"
+    s2_all_timeout = all(r["raw"] in ("p2_timeout", "error") for r in s2_results)
+    if s1_timeout and s2_all_timeout:
+        result = ("Server Unreachable",
+                  "The site did not respond on any attempt (consistent timeout on HTTP and browser checks).", 95)
+        _log_debug(domain, all_results, "Server Unreachable")
+        domain_cache[domain] = result
+        return result
+
+    # Mixed hard failures across both stages → Server Unreachable
+    s1_failed = s1["raw"] in ("timeout", "conn_refused", "s1_server_error", "dns_fail")
+    s2_all_failed = all(r["raw"] in ("p2_timeout", "p2_server_error", "dns_fail", "conn_refused", "error") for r in s2_results)
+    s2_has_hard = any(r["raw"] in ("p2_server_error", "dns_fail", "conn_refused") for r in s2_results)
+    if s1_failed and s2_all_failed and s2_has_hard:
+        result = ("Server Unreachable",
+                  f"The site failed all checks (HTTP: {s1['raw']}, browser: {s2_results[0]['raw']}).", 92)
+        _log_debug(domain, all_results, "Server Unreachable")
         domain_cache[domain] = result
         return result
 
