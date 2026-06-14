@@ -16,3 +16,9 @@ playwright==1.44.0
 customtkinter
 Pillow
 flask
+customtkinter
+flask
+openpyxl
+pandas
+Pillow
+playwright
