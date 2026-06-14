@@ -1004,6 +1004,50 @@ def export_excel():
     return send_file(path, as_attachment=True, download_name=f"results_{ts}.xlsx")
 
 
+@app.route("/test-url")
+def test_url():
+    url = request.args.get("url", "")
+    if not url:
+        return jsonify({"error": "no url provided"})
+    try:
+        import shutil
+        import glob as _glob
+        from playwright.sync_api import sync_playwright
+        from main import _check_website
+
+        with sync_playwright() as p:
+            browser_path = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")
+            if browser_path and os.path.isfile(browser_path):
+                browser = p.chromium.launch(executable_path=browser_path, headless=True)
+            else:
+                chromium_exec = shutil.which("chromium") or shutil.which("chromium-browser")
+                if not chromium_exec:
+                    nix_candidates = _glob.glob("/nix/store/*-chromium-*/bin/chromium")
+                    chromium_exec = nix_candidates[0] if nix_candidates else None
+                if chromium_exec:
+                    browser = p.chromium.launch(
+                        executable_path=chromium_exec,
+                        headless=True,
+                        args=["--no-sandbox", "--disable-dev-shm-usage"],
+                    )
+                else:
+                    browser = p.chromium.launch(headless=True)
+
+            try:
+                result = _check_website(browser, url, {})
+            finally:
+                browser.close()
+
+        return jsonify({
+            "url": url,
+            "status": result[0],
+            "reason": result[1],
+            "confidence": result[2],
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
