@@ -108,7 +108,7 @@ def extract_place(page: Page) -> Place:
                 place.opens_at = opens_at2_raw.replace("\u202f","")
     return place
 
-def scrape_places(search_for: str, total: int) -> List[Place]:
+def scrape_places(search_for: str, total: int, progress_callback=None, stop_event=None) -> List[Place]:
     setup_logging()
     places: List[Place] = []
     with sync_playwright() as p:
@@ -149,6 +149,9 @@ def scrape_places(search_for: str, total: int) -> List[Place]:
             listings = [listing.locator("xpath=..") for listing in listings]
             logging.info(f"Total Found: {len(listings)}")
             for idx, listing in enumerate(listings):
+                if stop_event and stop_event.is_set():
+                    logging.info("Stop requested — halting scrape.")
+                    break
                 try:
                     listing.click()
                     page.wait_for_selector('//div[@class="TIHn2 "]//h1[@class="DUwDvf lfPIob"]', timeout=10000)
@@ -156,6 +159,8 @@ def scrape_places(search_for: str, total: int) -> List[Place]:
                     place = extract_place(page)
                     if place.name:
                         places.append(place)
+                        if progress_callback:
+                            progress_callback(idx + 1, len(listings), place)
                     else:
                         logging.warning(f"No name found for listing {idx+1}, skipping.")
                 except Exception as e:

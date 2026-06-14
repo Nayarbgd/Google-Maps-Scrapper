@@ -1,5 +1,7 @@
 {pkgs}: {
   deps = [
+    pkgs.tcl
+    pkgs.tk
     pkgs.expat
     pkgs.dbus
     pkgs.nss
