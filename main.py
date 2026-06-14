@@ -1,5 +1,5 @@
 import logging
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from playwright.sync_api import sync_playwright, Page
 from dataclasses import dataclass, asdict
 import pandas as pd
@@ -8,12 +8,14 @@ import platform
 import time
 import os
 
+
 @dataclass
 class Place:
     name: str = ""
     address: str = ""
     website: str = ""
     phone_number: str = ""
+    email: str = ""
     reviews_count: Optional[int] = None
     reviews_average: Optional[float] = None
     store_shopping: str = "No"
@@ -21,13 +23,16 @@ class Place:
     store_delivery: str = "No"
     place_type: str = ""
     opens_at: str = ""
+    open_status: str = ""
     introduction: str = ""
+
 
 def setup_logging():
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
     )
+
 
 def extract_text(page: Page, xpath: str) -> str:
     try:
@@ -37,48 +42,77 @@ def extract_text(page: Page, xpath: str) -> str:
         logging.warning(f"Failed to extract text for xpath {xpath}: {e}")
     return ""
 
+
 def extract_place(page: Page) -> Place:
-    # XPaths
-    name_xpath = '//div[@class="TIHn2 "]//h1[@class="DUwDvf lfPIob"]'
-    address_xpath = '//button[@data-item-id="address"]//div[contains(@class, "fontBodyMedium")]'
-    website_xpath = '//a[@data-item-id="authority"]//div[contains(@class, "fontBodyMedium")]'
-    phone_number_xpath = '//button[contains(@data-item-id, "phone:tel:")]//div[contains(@class, "fontBodyMedium")]'
-    reviews_count_xpath = '//div[@class="TIHn2 "]//div[@class="fontBodyMedium dmRWX"]//div//span//span//span[@aria-label]'
+    name_xpath            = '//div[@class="TIHn2 "]//h1[@class="DUwDvf lfPIob"]'
+    address_xpath         = '//button[@data-item-id="address"]//div[contains(@class, "fontBodyMedium")]'
+    website_xpath         = '//a[@data-item-id="authority"]//div[contains(@class, "fontBodyMedium")]'
+    phone_number_xpath    = '//button[contains(@data-item-id, "phone:tel:")]//div[contains(@class, "fontBodyMedium")]'
+    reviews_count_xpath   = '//div[@class="TIHn2 "]//div[@class="fontBodyMedium dmRWX"]//div//span//span//span[@aria-label]'
     reviews_average_xpath = '//div[@class="TIHn2 "]//div[@class="fontBodyMedium dmRWX"]//div//span[@aria-hidden]'
-    info1 = '//div[@class="LTs0Rc"][1]'
-    info2 = '//div[@class="LTs0Rc"][2]'
-    info3 = '//div[@class="LTs0Rc"][3]'
-    opens_at_xpath = '//button[contains(@data-item-id, "oh")]//div[contains(@class, "fontBodyMedium")]'
-    opens_at_xpath2 = '//div[@class="MkV9"]//span[@class="ZDu9vd"]//span[2]'
-    place_type_xpath = '//div[@class="LBgpqf"]//button[@class="DkEaL "]'
-    intro_xpath = '//div[@class="WeS02d fontBodyMedium"]//div[@class="PYvSYb "]'
+    info1                 = '//div[@class="LTs0Rc"][1]'
+    info2                 = '//div[@class="LTs0Rc"][2]'
+    info3                 = '//div[@class="LTs0Rc"][3]'
+    opens_at_xpath        = '//button[contains(@data-item-id, "oh")]//div[contains(@class, "fontBodyMedium")]'
+    opens_at_xpath2       = '//div[@class="MkV9"]//span[@class="ZDu9vd"]//span[2]'
+    place_type_xpath      = '//div[@class="LBgpqf"]//button[@class="DkEaL "]'
+    intro_xpath           = '//div[@class="WeS02d fontBodyMedium"]//div[@class="PYvSYb "]'
 
     place = Place()
-    place.name = extract_text(page, name_xpath)
-    place.address = extract_text(page, address_xpath)
-    place.website = extract_text(page, website_xpath)
+    place.name         = extract_text(page, name_xpath)
+    place.address      = extract_text(page, address_xpath)
+    place.website      = extract_text(page, website_xpath)
     place.phone_number = extract_text(page, phone_number_xpath)
-    place.place_type = extract_text(page, place_type_xpath)
+    place.place_type   = extract_text(page, place_type_xpath)
     place.introduction = extract_text(page, intro_xpath) or "None Found"
+
+    # Email (appears as a mailto: link on some listings)
+    try:
+        email_el = page.locator('//a[contains(@href,"mailto:")]')
+        if email_el.count() > 0:
+            href = email_el.first.get_attribute("href") or ""
+            place.email = href.replace("mailto:", "").strip()
+    except Exception as e:
+        logging.warning(f"Failed to extract email: {e}")
+
+    # Open / Closed status
+    open_xpaths = [
+        '//div[contains(@class,"o0Svhf")]//span',
+        '//span[@class="ZDu9vd"]',
+        '//div[@class="MkV9"]//span[@class="ZDu9vd"]//span[1]',
+    ]
+    for ox in open_xpaths:
+        raw = extract_text(page, ox)
+        if raw:
+            low = raw.lower()
+            if "open" in low:
+                place.open_status = "Open"
+            elif "close" in low or "cerr" in low:
+                place.open_status = "Closed"
+            else:
+                place.open_status = raw.strip()[:30]
+            break
 
     # Reviews Count
     reviews_count_raw = extract_text(page, reviews_count_xpath)
     if reviews_count_raw:
         try:
-            temp = reviews_count_raw.replace('\xa0', '').replace('(','').replace(')','').replace(',','')
+            temp = reviews_count_raw.replace('\xa0', '').replace('(', '').replace(')', '').replace(',', '')
             place.reviews_count = int(temp)
         except Exception as e:
             logging.warning(f"Failed to parse reviews count: {e}")
+
     # Reviews Average
     reviews_avg_raw = extract_text(page, reviews_average_xpath)
     if reviews_avg_raw:
         try:
-            temp = reviews_avg_raw.replace(' ','').replace(',','.')
+            temp = reviews_avg_raw.replace(' ', '').replace(',', '.')
             place.reviews_average = float(temp)
         except Exception as e:
             logging.warning(f"Failed to parse reviews average: {e}")
+
     # Store Info
-    for idx, info_xpath in enumerate([info1, info2, info3]):
+    for info_xpath in [info1, info2, info3]:
         info_raw = extract_text(page, info_xpath)
         if info_raw:
             temp = info_raw.split('·')
@@ -90,41 +124,74 @@ def extract_place(page: Page) -> Place:
                     place.in_store_pickup = "Yes"
                 if 'delivery' in check:
                     place.store_delivery = "Yes"
+
     # Opens At
     opens_at_raw = extract_text(page, opens_at_xpath)
     if opens_at_raw:
         opens = opens_at_raw.split('⋅')
-        if len(opens) > 1:
-            place.opens_at = opens[1].replace("\u202f","")
-        else:
-            place.opens_at = opens_at_raw.replace("\u202f","")
+        place.opens_at = (opens[1] if len(opens) > 1 else opens_at_raw).replace("\u202f", "")
     else:
         opens_at2_raw = extract_text(page, opens_at_xpath2)
         if opens_at2_raw:
             opens = opens_at2_raw.split('⋅')
-            if len(opens) > 1:
-                place.opens_at = opens[1].replace("\u202f","")
-            else:
-                place.opens_at = opens_at2_raw.replace("\u202f","")
+            place.opens_at = (opens[1] if len(opens) > 1 else opens_at2_raw).replace("\u202f", "")
+
     return place
 
-def scrape_places(search_for: str, total: int, progress_callback=None, stop_event=None) -> List[Place]:
+
+def scrape_places(
+    search_for: str,
+    total: int,
+    progress_callback=None,
+    stop_event=None,
+    pause_event=None,
+    filters: Optional[Dict[str, Any]] = None,
+) -> List[Place]:
+    """
+    Scrape Google Maps for businesses matching `search_for`.
+
+    Args:
+        search_for:         Search query.
+        total:              Maximum number of listings to attempt.
+        progress_callback:  Called as callback(valid_count, total_listings, place, extras_dict).
+        stop_event:         threading.Event — when set, halts the scrape.
+        pause_event:        threading.Event — when set, pauses inside the loop.
+        filters:            Dict with optional keys:
+                              min_rating, min_reviews,
+                              require_web, require_phone, require_email.
+    Returns:
+        List of Place objects that passed deduplication and filters.
+    """
     setup_logging()
     places: List[Place] = []
+    seen_keys: set = set()
+    dup_count = 0
+    filter_count = 0
+    valid_count = 0
+
     with sync_playwright() as p:
         if platform.system() == "Windows":
             browser_path = r"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
             browser = p.chromium.launch(executable_path=browser_path, headless=True)
         else:
-            import shutil, glob as _glob
+            import shutil
+            import glob as _glob
             chromium_exec = shutil.which("chromium") or shutil.which("chromium-browser")
             if not chromium_exec:
                 nix_candidates = _glob.glob("/nix/store/*-chromium-*/bin/chromium")
                 chromium_exec = nix_candidates[0] if nix_candidates else None
             if chromium_exec:
-                browser = p.chromium.launch(executable_path=chromium_exec, headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+                browser = p.chromium.launch(
+                    executable_path=chromium_exec,
+                    headless=True,
+                    args=["--no-sandbox", "--disable-dev-shm-usage"],
+                )
             else:
-                browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+                browser = p.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-dev-shm-usage"],
+                )
+
         page = browser.new_page()
         try:
             page.goto("https://www.google.com/maps/@32.9817464,70.1930781,3.67z?", timeout=60000)
@@ -133,8 +200,12 @@ def scrape_places(search_for: str, total: int, progress_callback=None, stop_even
             page.keyboard.press("Enter")
             page.wait_for_selector('//a[contains(@href, "https://www.google.com/maps/place")]')
             page.hover('//a[contains(@href, "https://www.google.com/maps/place")]')
+
+            # ── Automatic pagination: scroll until we have enough listings ──
             previously_counted = 0
             while True:
+                if stop_event and stop_event.is_set():
+                    break
                 page.mouse.wheel(0, 10000)
                 page.wait_for_selector('//a[contains(@href, "https://www.google.com/maps/place")]')
                 found = page.locator('//a[contains(@href, "https://www.google.com/maps/place")]').count()
@@ -142,32 +213,105 @@ def scrape_places(search_for: str, total: int, progress_callback=None, stop_even
                 if found >= total:
                     break
                 if found == previously_counted:
-                    logging.info("Arrived at all available")
+                    logging.info("Arrived at all available results")
                     break
                 previously_counted = found
+
             listings = page.locator('//a[contains(@href, "https://www.google.com/maps/place")]').all()[:total]
             listings = [listing.locator("xpath=..") for listing in listings]
-            logging.info(f"Total Found: {len(listings)}")
+            logging.info(f"Total listings to process: {len(listings)}")
+
             for idx, listing in enumerate(listings):
+                # ── Stop check ──
                 if stop_event and stop_event.is_set():
                     logging.info("Stop requested — halting scrape.")
                     break
+
+                # ── Pause support ──
+                if pause_event and pause_event.is_set():
+                    logging.info("Scrape paused...")
+                    while pause_event.is_set():
+                        if stop_event and stop_event.is_set():
+                            break
+                        time.sleep(0.3)
+                    if not (stop_event and stop_event.is_set()):
+                        logging.info("Scrape resumed.")
+
                 try:
                     listing.click()
-                    page.wait_for_selector('//div[@class="TIHn2 "]//h1[@class="DUwDvf lfPIob"]', timeout=10000)
-                    time.sleep(1.5)  # Give time for details to load
+                    page.wait_for_selector(
+                        '//div[@class="TIHn2 "]//h1[@class="DUwDvf lfPIob"]',
+                        timeout=10000,
+                    )
+                    time.sleep(1.5)
                     place = extract_place(page)
-                    if place.name:
-                        places.append(place)
-                        if progress_callback:
-                            progress_callback(idx + 1, len(listings), place)
-                    else:
-                        logging.warning(f"No name found for listing {idx+1}, skipping.")
+
+                    if not place.name:
+                        logging.warning(f"No name found for listing {idx + 1}, skipping.")
+                        continue
+
+                    # ── Deduplication ──
+                    dedup_key = (place.name.lower().strip(), place.address.lower().strip())
+                    if dedup_key in seen_keys:
+                        logging.info(f"Duplicate skipped: {place.name}")
+                        dup_count += 1
+                        continue
+                    seen_keys.add(dedup_key)
+
+                    # ── Filters ──
+                    if filters:
+                        skip = False
+                        min_rating = filters.get("min_rating")
+                        if min_rating is not None:
+                            if place.reviews_average is None or place.reviews_average < min_rating:
+                                filter_count += 1
+                                skip = True
+
+                        if not skip:
+                            min_reviews = filters.get("min_reviews")
+                            if min_reviews is not None:
+                                if place.reviews_count is None or place.reviews_count < min_reviews:
+                                    filter_count += 1
+                                    skip = True
+
+                        if not skip and filters.get("require_web") and not place.website:
+                            filter_count += 1
+                            skip = True
+
+                        if not skip and filters.get("require_phone") and not place.phone_number:
+                            filter_count += 1
+                            skip = True
+
+                        if not skip and filters.get("require_email") and not place.email:
+                            filter_count += 1
+                            skip = True
+
+                        if skip:
+                            continue
+
+                    valid_count += 1
+                    places.append(place)
+
+                    if progress_callback:
+                        progress_callback(
+                            valid_count,
+                            len(listings),
+                            place,
+                            {
+                                "scraped_idx": idx + 1,
+                                "dup_skipped": dup_count,
+                                "filtered": filter_count,
+                            },
+                        )
+
                 except Exception as e:
-                    logging.warning(f"Failed to extract listing {idx+1}: {e}")
+                    logging.warning(f"Failed to extract listing {idx + 1}: {e}")
+
         finally:
             browser.close()
+
     return places
+
 
 def save_places_to_csv(places: List[Place], output_path: str = "result.csv", append: bool = False):
     df = pd.DataFrame([asdict(place) for place in places])
@@ -183,19 +327,35 @@ def save_places_to_csv(places: List[Place], output_path: str = "result.csv", app
     else:
         logging.warning("No data to save. DataFrame is empty.")
 
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-s", "--search", type=str, help="Search query for Google Maps")
-    parser.add_argument("-t", "--total", type=int, help="Total number of results to scrape")
-    parser.add_argument("-o", "--output", type=str, default="result.csv", help="Output CSV file path")
-    parser.add_argument("--append", action="store_true", help="Append results to the output file instead of overwriting")
+    parser.add_argument("-s", "--search",  type=str, help="Search query for Google Maps")
+    parser.add_argument("-t", "--total",   type=int, help="Total number of results to scrape")
+    parser.add_argument("-o", "--output",  type=str, default="result.csv", help="Output CSV file path")
+    parser.add_argument("--append",        action="store_true", help="Append to existing file")
+    parser.add_argument("--min-rating",    type=float, help="Minimum rating filter")
+    parser.add_argument("--min-reviews",   type=int,   help="Minimum reviews filter")
+    parser.add_argument("--require-web",   action="store_true", help="Only include results with a website")
+    parser.add_argument("--require-phone", action="store_true", help="Only include results with a phone")
+    parser.add_argument("--require-email", action="store_true", help="Only include results with an email")
     args = parser.parse_args()
-    search_for = args.search or "turkish stores in toronto Canada"
-    total = args.total or 1
+
+    filters = {}
+    if args.min_rating:   filters["min_rating"]    = args.min_rating
+    if args.min_reviews:  filters["min_reviews"]   = args.min_reviews
+    if args.require_web:  filters["require_web"]   = True
+    if args.require_phone:filters["require_phone"] = True
+    if args.require_email:filters["require_email"] = True
+
+    search_for  = args.search or "turkish stores in toronto Canada"
+    total       = args.total or 1
     output_path = args.output
-    append = args.append
-    places = scrape_places(search_for, total)
+    append      = args.append
+
+    places = scrape_places(search_for, total, filters=filters or None)
     save_places_to_csv(places, output_path, append=append)
+
 
 if __name__ == "__main__":
     main()

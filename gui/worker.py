@@ -15,19 +15,31 @@ class ScrapeWorker(threading.Thread):
 
     Queue message types:
         ("log",      message: str)
-        ("progress", current: int, total: int, place: Place)
+        ("progress", current: int, total: int, place: Place, extras: dict)
         ("done",     places: list)
         ("error",    message: str)
         ("stopped",)
+        ("paused",)
+        ("resumed",)
     """
 
-    def __init__(self, search_for: str, total: int, result_queue: queue.Queue, stop_event: threading.Event):
+    def __init__(
+        self,
+        search_for: str,
+        total: int,
+        result_queue: queue.Queue,
+        stop_event: threading.Event,
+        pause_event: threading.Event = None,
+        filters: dict = None,
+    ):
         super().__init__(daemon=True)
-        self.search_for = search_for
-        self.total = total
-        self.queue = result_queue
-        self.stop_event = stop_event
-        self._places = []
+        self.search_for  = search_for
+        self.total       = total
+        self.queue       = result_queue
+        self.stop_event  = stop_event
+        self.pause_event = pause_event
+        self.filters     = filters or {}
+        self._places     = []
 
     def run(self):
         self._install_log_handler()
@@ -37,6 +49,8 @@ class ScrapeWorker(threading.Thread):
                 self.total,
                 progress_callback=self._on_progress,
                 stop_event=self.stop_event,
+                pause_event=self.pause_event,
+                filters=self.filters if self.filters else None,
             )
             if self.stop_event.is_set():
                 self.queue.put(("stopped",))
@@ -47,8 +61,8 @@ class ScrapeWorker(threading.Thread):
         finally:
             self._remove_log_handler()
 
-    def _on_progress(self, current: int, total: int, place):
-        self.queue.put(("progress", current, total, place))
+    def _on_progress(self, current: int, total: int, place, extras: dict = None):
+        self.queue.put(("progress", current, total, place, extras or {}))
 
     def _install_log_handler(self):
         self._handler = _QueueLogHandler(self.queue)
