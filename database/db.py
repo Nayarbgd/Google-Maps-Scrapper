@@ -40,26 +40,33 @@ def init_db() -> None:
     """)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS places (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id      INTEGER NOT NULL,
-            name            TEXT,
-            address         TEXT,
-            website         TEXT,
-            phone_number    TEXT,
-            email           TEXT,
-            reviews_count   INTEGER,
-            reviews_average REAL,
-            place_type      TEXT,
-            opens_at        TEXT,
-            open_status     TEXT,
-            store_shopping  TEXT,
-            in_store_pickup TEXT,
-            store_delivery  TEXT,
-            introduction    TEXT,
-            scraped_at      TEXT,
+            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id           INTEGER NOT NULL,
+            name                 TEXT,
+            address              TEXT,
+            website              TEXT,
+            phone_number         TEXT,
+            email                TEXT,
+            reviews_count        INTEGER,
+            reviews_average      REAL,
+            place_type           TEXT,
+            opens_at             TEXT,
+            open_status          TEXT,
+            store_shopping       TEXT,
+            in_store_pickup      TEXT,
+            store_delivery       TEXT,
+            introduction         TEXT,
+            scraped_at           TEXT,
+            website_status       TEXT,
+            website_error_reason TEXT,
             FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
         )
     """)
+    for col, col_type in [("website_status", "TEXT"), ("website_error_reason", "TEXT")]:
+        try:
+            conn.execute(f"ALTER TABLE places ADD COLUMN {col} {col_type}")
+        except Exception:
+            pass
     conn.commit()
     conn.close()
 
@@ -84,8 +91,9 @@ def save_place(session_id: int, place) -> None:
         INSERT INTO places
           (session_id, name, address, website, phone_number, email,
            reviews_count, reviews_average, place_type, opens_at, open_status,
-           store_shopping, in_store_pickup, store_delivery, introduction, scraped_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           store_shopping, in_store_pickup, store_delivery, introduction, scraped_at,
+           website_status, website_error_reason)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             session_id,
@@ -104,6 +112,8 @@ def save_place(session_id: int, place) -> None:
             d.get("store_delivery", "No"),
             d.get("introduction", ""),
             datetime.now().isoformat(),
+            d.get("website_status", ""),
+            d.get("website_error_reason", ""),
         ),
     )
     conn.commit()

@@ -1,0 +1,141 @@
+Add a new feature called:
+
+"Broken Website Detection"
+
+This is a NEW feature and must be completely separate from the existing filter:
+
+☑ Only businesses without website
+
+Create a second filter:
+
+☑ Only businesses with broken websites
+
+The goal is to identify businesses that HAVE a website URL in Google Maps but whose website is not functioning properly.
+
+These are high-value sales opportunities.
+
+For every business that has a website URL:
+
+Open the website using Playwright.
+Wait up to 5 seconds for the page to load.
+Use:
+
+page.goto(url, timeout=5000, wait_until="domcontentloaded")
+
+If the page loads successfully, mark:
+
+Website Status = Working
+
+If it fails, determine the most probable reason.
+
+Only classify failures into these three categories:
+
+❌ Domain Not Found
+Definition:
+
+DNS resolution failed
+ERR_NAME_NOT_RESOLVED
+net::ERR_NAME_NOT_RESOLVED
+Domain does not exist
+
+❌ Timeout
+Definition:
+
+Request exceeded 5 seconds
+net::ERR_TIMED_OUT
+Server did not respond in time
+
+❌ Broken
+Definition:
+
+HTTP 404
+HTTP 500
+Connection refused
+SSL failures
+Empty page
+Other loading errors
+
+Add these new fields:
+
+website_status
+
+Possible values:
+
+Working
+Broken
+Timeout
+Domain Not Found
+
+website_error_reason
+
+Human readable explanation.
+
+Examples:
+
+"The domain does not exist."
+
+"The website did not respond within 5 seconds."
+
+"The website returned an error page."
+
+Add:
+
+Website Status
+Website Error Reason
+
+Examples:
+
+🟢 Working
+🔴 Broken
+🔴 Timeout
+🔴 Domain Not Found
+
+In the Filters panel add:
+
+☑ Only businesses with broken websites
+
+When enabled:
+
+Only show businesses whose:
+
+website_status != Working
+
+This includes:
+
+Broken
+Timeout
+Domain Not Found
+
+Add automatic tags:
+
+🔥 Domain Not Found
+🔥 Timeout
+🔥 Broken Website
+
+These businesses should receive:
+
+Opportunity = Critical
+
+Include the new fields in:
+
+CSV export
+Excel export
+Session History
+
+Website checking must not freeze the application.
+
+Perform website validation in the background.
+
+Only test websites that actually exist.
+
+Avoid duplicate checks:
+
+If the same website domain has already been tested during the current session, reuse the previous result from memory instead of testing it again.
+
+Do NOT modify the existing scraper architecture.
+
+Integrate this as an additional feature inside the current lead generation workflow.
+
+Preserve all existing functionality.
+
+This feature must help identify businesses whose websites appear in Google Maps but are currently not functioning.

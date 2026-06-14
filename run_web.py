@@ -161,9 +161,15 @@ td.td-rating{color:var(--warning);font-weight:700}
 td.td-status-open{color:var(--success);font-weight:600}
 td.td-status-closed{color:var(--danger);font-weight:600}
 td.td-status-dim{color:var(--muted)}
+td.td-opp-critical{color:#ff4444;font-weight:700}
 td.td-opp-high{color:#f87171}
 td.td-opp-med{color:#facc15}
 td.td-opp-low{color:#4ade80}
+td.td-ws-working{color:#4ade80;font-weight:600}
+td.td-ws-broken{color:#f87171;font-weight:600}
+td.td-ws-timeout{color:#f87171;font-weight:600}
+td.td-ws-notfound{color:#f87171;font-weight:600}
+td.td-ws-dim{color:#6b7280}
 .empty-state{text-align:center;padding:60px 20px;color:var(--muted)}
 .empty-state .ei{font-size:44px;margin-bottom:10px}
 
@@ -243,6 +249,7 @@ td.td-opp-low{color:#4ade80}
     <label class="f-check"><input type="checkbox" id="f-phone"/>  Phone required</label>
     <label class="f-check"><input type="checkbox" id="f-email"/>  Email required</label>
     <label class="f-check"><input type="checkbox" id="f-no-web"/>  Only businesses without website</label>
+    <label class="f-check"><input type="checkbox" id="f-broken-web"/>  Only businesses with broken websites</label>
   </div>
 
   <div class="sep"></div>
@@ -333,9 +340,11 @@ td.td-opp-low{color:#4ade80}
         <th style="min-width:165px">Email</th>
         <th style="min-width:72px">Status</th>
         <th style="min-width:130px">Opportunity</th>
+        <th style="min-width:110px">Website Status</th>
+        <th style="min-width:210px">Website Error</th>
       </tr></thead>
       <tbody id="results-body">
-        <tr id="empty-row"><td colspan="10">
+        <tr id="empty-row"><td colspan="12">
           <div class="empty-state">
             <div class="ei">🔍</div>
             <p>No results yet — enter a search and press Start Search</p>
@@ -449,12 +458,26 @@ function hasValidWebsite(place){
   return ws && ws !== '-' && ws !== '—' && (ws.includes('.')||ws.toLowerCase().includes('http'));
 }
 function getOpportunity(place){
+  const ws = place.website_status||'';
+  if(ws && ws !== 'Working')
+    return {label:'🔥 Critical', cls:'td-opp-critical'};
   if(!hasValidWebsite(place))
-    return {label:'🔥 High',   cls:'td-opp-high'};
+    return {label:'🔥 High',     cls:'td-opp-high'};
   const rev = parseInt(place.reviews_count)||0;
   if(rev < 20)
-    return {label:'🟡 Medium', cls:'td-opp-med'};
-  return   {label:'🟢 Low',    cls:'td-opp-low'};
+    return {label:'🟡 Medium',   cls:'td-opp-med'};
+  return   {label:'🟢 Low',      cls:'td-opp-low'};
+}
+function getWsCell(place){
+  const s = place.website_status||'';
+  if(!s) return {label:'—', cls:'td-ws-dim'};
+  const map = {
+    'Working':          {label:'🟢 Working',          cls:'td-ws-working'},
+    'Broken':           {label:'🔴 Broken',            cls:'td-ws-broken'},
+    'Timeout':          {label:'🔴 Timeout',           cls:'td-ws-timeout'},
+    'Domain Not Found': {label:'🔴 Domain Not Found',  cls:'td-ws-notfound'},
+  };
+  return map[s] || {label:s, cls:'td-ws-dim'};
 }
 
 // ─── Table ────────────────────────────────────────────────────────────────
@@ -467,6 +490,8 @@ function addRow(place){
   if(place.open_status==='Open')   statusCls='td-status-open';
   if(place.open_status==='Closed') statusCls='td-status-closed';
   const opp = getOpportunity(place);
+  const wsc = getWsCell(place);
+  const wsErr = (place.website_error_reason||'').trim();
 
   const tr = document.createElement('tr');
   tr.innerHTML = `
@@ -479,7 +504,9 @@ function addRow(place){
     <td title="${esc(place.place_type)}">${esc(place.place_type||'—')}</td>
     <td class="td-email" title="${esc(place.email)}">${esc(place.email||'—')}</td>
     <td class="${statusCls}">${esc(statusTxt)}</td>
-    <td class="${opp.cls}" style="font-weight:600">${opp.label}</td>`;
+    <td class="${opp.cls}" style="font-weight:600">${opp.label}</td>
+    <td class="${wsc.cls}">${wsc.label}</td>
+    <td class="td-ws-dim" title="${esc(wsErr)}">${esc(wsErr||'—')}</td>`;
   tbody.appendChild(tr);
   tr.scrollIntoView({block:'nearest'});
 }
@@ -523,10 +550,11 @@ function getFilters(){
   const v = parseInt(document.getElementById('f-reviews').value);
   if(r>0)  f.min_rating  = r;
   if(v>0)  f.min_reviews = v;
-  if(document.getElementById('f-web').checked)    f.require_web   = true;
-  if(document.getElementById('f-phone').checked)  f.require_phone = true;
-  if(document.getElementById('f-email').checked)  f.require_email = true;
-  if(document.getElementById('f-no-web').checked) f.no_website    = true;
+  if(document.getElementById('f-web').checked)        f.require_web         = true;
+  if(document.getElementById('f-phone').checked)      f.require_phone       = true;
+  if(document.getElementById('f-email').checked)      f.require_email       = true;
+  if(document.getElementById('f-no-web').checked)     f.no_website          = true;
+  if(document.getElementById('f-broken-web').checked) f.only_broken_websites = true;
   return f;
 }
 
@@ -539,7 +567,7 @@ async function startScrape(){
   const query = loc ? `${kw} in ${loc}` : kw;
 
   resetStats();
-  document.getElementById('results-body').innerHTML=`<tr id="empty-row"><td colspan="9"><div class="empty-state"><div class="ei">🔍</div><p>Searching…</p></div></td></tr>`;
+  document.getElementById('results-body').innerHTML=`<tr id="empty-row"><td colspan="12"><div class="empty-state"><div class="ei">🔍</div><p>Searching…</p></div></td></tr>`;
   document.getElementById('log-box').innerHTML='';
   setProgress(0,max); setExtras(0,0,0);
   document.getElementById('bar-fill').style.width='0%';
@@ -635,7 +663,7 @@ async function clearResults(){
   if(places.length && !confirm('Clear all current results from the view?')) return;
   await fetch('/clear',{method:'POST'});
   resetStats();
-  document.getElementById('results-body').innerHTML=`<tr id="empty-row"><td colspan="9"><div class="empty-state"><div class="ei">🔍</div><p>No results yet — enter a search query and press Start Search</p></div></td></tr>`;
+  document.getElementById('results-body').innerHTML=`<tr id="empty-row"><td colspan="12"><div class="empty-state"><div class="ei">🔍</div><p>No results yet — enter a search query and press Start Search</p></div></td></tr>`;
   document.getElementById('log-box').innerHTML='';
   document.getElementById('bar-fill').style.width='0%';
   document.getElementById('count-text').textContent='0 / 0';
@@ -751,10 +779,11 @@ def start():
         v = int(raw_f.get("min_reviews", 0) or 0)
         if v > 0: filters["min_reviews"] = v
     except Exception: pass
-    if raw_f.get("require_web"):   filters["require_web"]   = True
-    if raw_f.get("require_phone"): filters["require_phone"] = True
-    if raw_f.get("require_email"): filters["require_email"] = True
-    if raw_f.get("no_website"):    filters["no_website"]    = True
+    if raw_f.get("require_web"):          filters["require_web"]          = True
+    if raw_f.get("require_phone"):        filters["require_phone"]        = True
+    if raw_f.get("require_email"):        filters["require_email"]        = True
+    if raw_f.get("no_website"):           filters["no_website"]           = True
+    if raw_f.get("only_broken_websites"): filters["only_broken_websites"] = True
 
     # Reset state
     state["places"]        = []
@@ -903,6 +932,9 @@ def delete_session(sid):
 # ─── Export ───────────────────────────────────────────────────────────────────
 
 def _compute_opportunity(row) -> str:
+    ws_status = str(row.get("website_status") or "").strip()
+    if ws_status and ws_status != "Working":
+        return "Critical Opportunity"
     ws = str(row.get("website") or "").strip()
     has_web = bool(ws and ws != "-" and ws != "—" and ("." in ws or "http" in ws.lower()))
     if not has_web:

@@ -1,5 +1,7 @@
 import logging
+import re
 from typing import List, Optional, Dict, Any
+from urllib.parse import urlparse
 from playwright.sync_api import sync_playwright, Page
 from dataclasses import dataclass, asdict
 import pandas as pd
@@ -25,6 +27,8 @@ class Place:
     opens_at: str = ""
     open_status: str = ""
     introduction: str = ""
+    website_status: str = ""
+    website_error_reason: str = ""
 
 
 def setup_logging():
@@ -32,6 +36,57 @@ def setup_logging():
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
     )
+
+
+def _check_website(browser, url: str, domain_cache: dict):
+    """
+    Opens the URL in a fresh browser context and returns (status, reason).
+    status: "Working" | "Broken" | "Timeout" | "Domain Not Found"
+    Results are cached by domain so each domain is only tested once per session.
+    """
+    norm_url = url.strip()
+    if not norm_url.startswith(("http://", "https://")):
+        norm_url = "https://" + norm_url
+
+    try:
+        parsed = urlparse(norm_url)
+        domain = re.sub(r"^www\.", "", parsed.netloc.lower())
+    except Exception:
+        domain = norm_url
+
+    if domain in domain_cache:
+        return domain_cache[domain]
+
+    result = ("Broken", "The website returned an error page.")
+    try:
+        ctx = browser.new_context(ignore_https_errors=True)
+        check_page = ctx.new_page()
+        try:
+            response = check_page.goto(norm_url, timeout=5000, wait_until="domcontentloaded")
+            if response is None:
+                result = ("Broken", "The website did not return a response.")
+            elif response.status >= 400:
+                result = ("Broken", f"The website returned an error page (HTTP {response.status}).")
+            else:
+                result = ("Working", "")
+        except Exception as exc:
+            err = str(exc).lower()
+            if "name_not_resolved" in err or "err_name_not_resolved" in err:
+                result = ("Domain Not Found", "The domain does not exist.")
+            elif "timed_out" in err or "timeout" in err or "err_timed_out" in err:
+                result = ("Timeout", "The website did not respond within 5 seconds.")
+            else:
+                result = ("Broken", "The website returned an error page.")
+        finally:
+            try:
+                ctx.close()
+            except Exception:
+                pass
+    except Exception:
+        result = ("Broken", "Could not connect to the website.")
+
+    domain_cache[domain] = result
+    return result
 
 
 def extract_text(page: Page, xpath: str) -> str:
@@ -165,6 +220,7 @@ def scrape_places(
     setup_logging()
     places: List[Place] = []
     seen_keys: set = set()
+    domain_cache: dict = {}
     dup_count = 0
     filter_count = 0
     valid_count = 0
@@ -258,6 +314,18 @@ def scrape_places(
                         continue
                     seen_keys.add(dedup_key)
 
+                    # ── Website status check ──
+                    ws_raw = (place.website or "").strip()
+                    ws_has_url = bool(ws_raw and ws_raw != "-" and ("." in ws_raw or "http" in ws_raw.lower()))
+                    if ws_has_url:
+                        try:
+                            ws_status, ws_reason = _check_website(browser, ws_raw, domain_cache)
+                            place.website_status = ws_status
+                            place.website_error_reason = ws_reason
+                            logging.info(f"Website check [{ws_status}]: {ws_raw}")
+                        except Exception as exc:
+                            logging.warning(f"Website check failed for {ws_raw}: {exc}")
+
                     # ── Filters ──
                     if filters:
                         skip = False
@@ -282,6 +350,11 @@ def scrape_places(
                             ws = (place.website or "").strip()
                             has_web = bool(ws and ws != "-" and ("." in ws or "http" in ws.lower()))
                             if has_web:
+                                filter_count += 1
+                                skip = True
+
+                        if not skip and filters.get("only_broken_websites"):
+                            if place.website_status == "Working" or not place.website_status:
                                 filter_count += 1
                                 skip = True
 
