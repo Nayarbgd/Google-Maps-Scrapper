@@ -22,3 +22,4 @@ openpyxl
 pandas
 Pillow
 playwright
+requests

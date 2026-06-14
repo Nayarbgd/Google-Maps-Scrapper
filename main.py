@@ -9,6 +9,12 @@ import argparse
 import platform
 import time
 import os
+import requests as _requests
+try:
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+except Exception:
+    pass
 
 
 @dataclass
@@ -41,26 +47,33 @@ def setup_logging():
 
 def _check_website(browser, url: str, domain_cache: dict):
     """
-    4-step website checker. Requires at least TWO independent failures before
-    classifying a site as broken. Prefers false negatives (missing a broken site)
-    over false positives (flagging a working site as broken).
+    Two-stage website checker.
 
-    Steps:
-        1. https://domain  — 15 s timeout
-        2. https://domain  — retry,  15 s timeout
-        3. http://domain   — HTTP fallback, 15 s timeout
-        4. Fresh browser context, https  — 15 s timeout
+    Stage 1 — HTTP (requests library, no browser):
+        HEAD request first; fall back to GET if HEAD fails or returns 405/501.
+        Timeout: 20 s. Follows redirects. Uses a real browser User-Agent.
+        HTTP 200 / 301 / 302 / 307 / 308 / 403 / any 2xx-3xx → accessible, stop.
+        HTTP 503                                               → ambiguous, go to Stage 2.
+        DNS fail / connection refused / 5xx / timeout         → go to Stage 2.
+
+    Stage 2 — Playwright (only when Stage 1 did not confirm accessible):
+        Two independent attempts. Fresh browser context each time.
+        Timeout: 20 s, wait_until="networkidle".
+        If either attempt shows the site is accessible → return Working/Protected.
+
+    Final classification — ONLY when BOTH stages fail:
+        Both must agree on the failure type for a broken status to be assigned.
+        Any ambiguity or mixed signals → return Working (conservative fallback).
 
     Returns (website_status, website_error_reason, website_confidence).
 
-    Statuses and confidence:
-        Working                  →  0%
-        Accessible but Protected →  0%
-        Very Slow but Working    →  0%
-        Domain Not Found         → 100%
-        Parked Domain            → 100%
-        Server Unreachable       →  95%
-        Server Error             →  90%
+    Statuses:
+        Working                  →  0 %
+        Accessible but Protected →  0 %
+        Domain Not Found         → 100 %
+        Parked Domain            → 100 %
+        Server Unreachable       →  95 %
+        Server Error             →  90 %
     """
     _PARKED_PHRASES = [
         "this domain is for sale", "buy this domain", "sedo",
@@ -79,111 +92,266 @@ def _check_website(browser, url: str, domain_cache: dict):
         "please verify you are a human",
         "one more step", "ray id",
     ]
-
     _UA = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     )
+    _HTTP_HEADERS = {
+        "User-Agent": _UA,
+        "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate",
+        "Connection": "keep-alive",
+    }
 
+    # ── URL normalisation ──────────────────────────────────────────────────────
     norm_url = url.strip()
     if not norm_url.startswith(("http://", "https://")):
         norm_url = "https://" + norm_url
 
     try:
-        parsed = urlparse(norm_url)
-        domain = re.sub(r"^www\.", "", parsed.netloc.lower())
-        https_url = "https://" + parsed.netloc + (parsed.path or "/")
-        http_url  = "http://"  + parsed.netloc + (parsed.path or "/")
-        if parsed.query:
-            https_url += "?" + parsed.query
-            http_url  += "?" + parsed.query
+        parsed    = urlparse(norm_url)
+        domain    = re.sub(r"^www\.", "", parsed.netloc.lower())
+        suffix    = (parsed.path or "/") + (("?" + parsed.query) if parsed.query else "")
+        https_url = "https://" + parsed.netloc + suffix
+        http_url  = "http://"  + parsed.netloc + suffix
     except Exception:
-        domain     = norm_url
-        https_url  = norm_url
-        http_url   = norm_url.replace("https://", "http://", 1)
+        domain    = norm_url
+        https_url = norm_url
+        http_url  = norm_url.replace("https://", "http://", 1)
 
     if domain in domain_cache:
         return domain_cache[domain]
 
-    def _attempt(attempt_url):
+    # ── Stage 1: HTTP check (requests) ────────────────────────────────────────
+    def _http_check(check_url):
         """
-        Single attempt. Returns a dict:
-            raw:    'working' | 'protected' | 'dns_fail' | 'conn_refused' |
-                    'server_error' | 'parked' | 'timeout' | 'error'
-            code:   HTTP status int or None
-            detail: human-readable description
+        Try HEAD first; fall back to GET.
+        Returns dict: raw | code | detail
+          raw values: working | protected | parked |
+                      dns_fail | conn_refused | s1_503 | s1_server_error | timeout | error
+        """
+        kw = dict(headers=_HTTP_HEADERS, timeout=20, allow_redirects=True, verify=False)
+
+        # HEAD attempt
+        head_code = None
+        try:
+            rh = _requests.head(check_url, **kw)
+            if rh.status_code not in (405, 501):
+                head_code = rh.status_code
+        except Exception:
+            pass  # HEAD unsupported or network error — fall through to GET
+
+        # HEAD gave a clear accessible answer → return immediately (no body needed)
+        if head_code is not None:
+            if head_code in (200, 301, 302, 307, 308) or (200 <= head_code < 400):
+                return {"raw": "working", "code": head_code,
+                        "detail": f"HTTP {head_code} (HEAD) — accessible"}
+            if head_code == 403:
+                return {"raw": "protected", "code": head_code,
+                        "detail": "HTTP 403 (HEAD) — access restricted, accessible to humans"}
+
+        # GET request (always run when HEAD was inconclusive or returned 4xx/5xx)
+        try:
+            rg   = _requests.get(check_url, **kw, stream=True)
+            code = rg.status_code
+            # Read up to 8 KB for phrase analysis; close stream immediately after
+            raw_bytes = b""
+            try:
+                for chunk in rg.iter_content(chunk_size=8192):
+                    raw_bytes += chunk
+                    break
+            except Exception:
+                pass
+            finally:
+                rg.close()
+            body = raw_bytes.decode("utf-8", errors="ignore").lower()
+
+        except _requests.exceptions.ConnectionError as exc:
+            err = str(exc).lower()
+            if any(k in err for k in (
+                "nodename", "name resolution", "getaddrinfo",
+                "name or service not known", "nxdomain",
+                "temporary failure in name resolution",
+                "failed to resolve", "[errno 11001]", "[errno -2]",
+                "[errno -3]", "[errno -5]",
+            )):
+                return {"raw": "dns_fail", "code": None,
+                        "detail": "DNS resolution failed — domain does not exist"}
+            return {"raw": "conn_refused", "code": None,
+                    "detail": "Connection refused or network unreachable"}
+        except _requests.exceptions.Timeout:
+            return {"raw": "timeout", "code": None,
+                    "detail": "HTTP request timed out after 20 seconds"}
+        except Exception as exc:
+            return {"raw": "error", "code": None,
+                    "detail": f"HTTP request error: {str(exc)[:120]}"}
+
+        # ── Classify GET response ──────────────────────────────────────────
+        # Explicitly accessible — check body first for parked/protected signals
+        if code in (200, 301, 302, 307, 308) or (200 <= code < 400):
+            for phrase in _PARKED_PHRASES:
+                if phrase in body:
+                    return {"raw": "parked", "code": code,
+                            "detail": "Domain is parked or for sale (detected in page content)"}
+            for phrase in _PROTECTED_PHRASES:
+                if phrase in body:
+                    return {"raw": "protected", "code": code,
+                            "detail": "Bot-protection or access-restriction page — accessible to humans"}
+            return {"raw": "working", "code": code,
+                    "detail": f"HTTP {code} — accessible"}
+
+        if code == 403:
+            return {"raw": "protected", "code": code,
+                    "detail": "HTTP 403 — access restricted, accessible to humans"}
+
+        # 503 — never immediately broken; might be Cloudflare / Wix / Squarespace
+        if code == 503:
+            for phrase in _PROTECTED_PHRASES:
+                if phrase in body:
+                    return {"raw": "protected", "code": code,
+                            "detail": "HTTP 503 with bot-protection page — accessible to humans"}
+            for phrase in _PARKED_PHRASES:
+                if phrase in body:
+                    return {"raw": "parked", "code": code,
+                            "detail": "Domain is parked or for sale"}
+            return {"raw": "s1_503", "code": code,
+                    "detail": "HTTP 503 — possible CDN/protection page; needs Playwright confirmation"}
+
+        # Other 5xx
+        if code >= 500:
+            return {"raw": "s1_server_error", "code": code,
+                    "detail": f"HTTP {code} — server error"}
+
+        # 404
+        if code == 404:
+            return {"raw": "s1_server_error", "code": code,
+                    "detail": "HTTP 404 — resource not found"}
+
+        # Other 4xx (not 403) — ambiguous, do not treat as broken
+        return {"raw": "error", "code": code,
+                "detail": f"HTTP {code} — ambiguous, not treated as broken"}
+
+    # Run Stage 1 on https; if the error is a network-level failure also try http
+    s1 = _http_check(https_url)
+    if s1["raw"] in ("error", "timeout", "conn_refused") and https_url != http_url:
+        s1_http = _http_check(http_url)
+        if s1_http["raw"] in ("working", "protected", "parked"):
+            s1 = s1_http  # http was reachable — use that result
+
+    logging.info(
+        f"WS-check S1 ({https_url}): raw={s1['raw']} "
+        f"code={s1['code']} — {s1['detail']}"
+    )
+
+    # Stage 1 confirmed accessible → done
+    if s1["raw"] == "working":
+        result = ("Working", s1["detail"], 0)
+        _log_debug(domain, [s1], "Working")
+        domain_cache[domain] = result
+        return result
+
+    if s1["raw"] == "protected":
+        result = ("Accessible but Protected", s1["detail"], 0)
+        _log_debug(domain, [s1], "Accessible but Protected")
+        domain_cache[domain] = result
+        return result
+
+    if s1["raw"] == "parked":
+        result = ("Parked Domain", "The domain is parked or for sale.", 100)
+        _log_debug(domain, [s1], "Parked Domain")
+        domain_cache[domain] = result
+        return result
+
+    # ── Stage 2: Playwright (Stage 1 did not confirm accessible) ──────────────
+    def _pw_attempt(attempt_url):
+        """
+        Single Playwright attempt with networkidle and 20 s timeout.
+        Returns dict: raw | code | detail
+          raw values: working | protected | parked | dns_fail | conn_refused |
+                      p2_server_error | p2_503 | timeout | error
         """
         ctx = None
         try:
             ctx = browser.new_context(ignore_https_errors=True, user_agent=_UA)
             pg  = ctx.new_page()
             try:
-                response = pg.goto(attempt_url, timeout=15000, wait_until="load")
+                response = pg.goto(attempt_url, timeout=20000, wait_until="networkidle")
             except Exception as exc:
                 err = str(exc).lower()
                 if any(k in err for k in ("name_not_resolved", "nxdomain", "dns_probe",
                                           "err_name_not_resolved")):
-                    return {"raw": "dns_fail",    "code": None,
-                            "detail": "DNS resolution failed — domain does not exist"}
+                    return {"raw": "dns_fail", "code": None,
+                            "detail": "Playwright: DNS resolution failed"}
                 if any(k in err for k in ("connection_refused", "err_connection_refused")):
                     return {"raw": "conn_refused", "code": None,
-                            "detail": "Connection refused by the server"}
+                            "detail": "Playwright: connection refused"}
                 if any(k in err for k in ("timed_out", "err_timed_out", "timeout")):
-                    return {"raw": "timeout",     "code": None,
-                            "detail": "No response within 15 seconds"}
+                    return {"raw": "timeout", "code": None,
+                            "detail": "Playwright: page did not reach networkidle within 20 s"}
                 return {"raw": "error", "code": None,
-                        "detail": f"Network error: {str(exc)[:120]}"}
+                        "detail": f"Playwright error: {str(exc)[:120]}"}
 
             if response is None:
-                return {"raw": "error", "code": None, "detail": "Server returned no response"}
+                return {"raw": "error", "code": None, "detail": "Playwright: no response object"}
 
             code = response.status
 
-            # 301 / 302 / 307 / 308 — redirects are completely normal
+            # Redirects → working
             if code in (301, 302, 307, 308):
-                return {"raw": "working", "code": code, "detail": f"Redirect ({code}) — normal"}
+                return {"raw": "working", "code": code,
+                        "detail": f"Playwright: redirect ({code}) — accessible"}
 
-            # 403 — access restricted, not broken
+            # 403 → protected
             if code == 403:
                 return {"raw": "protected", "code": code,
-                        "detail": "Access restricted (HTTP 403) — not broken"}
+                        "detail": "Playwright: HTTP 403 — accessible to humans"}
 
-            # Read body for content analysis
+            # Read rendered body
             try:
                 body = pg.content().lower()
             except Exception:
                 body = ""
 
-            # Bot-protection / captcha pages — accessible but protected
+            # Bot protection / captcha → protected
             for phrase in _PROTECTED_PHRASES:
                 if phrase in body:
                     return {"raw": "protected", "code": code,
-                            "detail": "Bot protection or browser-check page detected"}
+                            "detail": "Playwright: bot-protection or browser-check page — accessible to humans"}
 
             # Parked domain
             for phrase in _PARKED_PHRASES:
                 if phrase in body:
                     return {"raw": "parked", "code": code,
-                            "detail": "Domain appears to be parked or for sale"}
+                            "detail": "Playwright: domain is parked or for sale"}
 
-            # Definitive server errors
-            if code in (404, 500, 502, 503) or code >= 500:
-                return {"raw": "server_error", "code": code,
-                        "detail": f"Server returned error (HTTP {code})"}
+            # 503 — keep separate from hard server errors
+            if code == 503:
+                return {"raw": "p2_503", "code": code,
+                        "detail": "Playwright: HTTP 503"}
 
-            # Any other successful-ish response
+            # Hard server errors
+            if code in (500, 502, 504) or code >= 500:
+                return {"raw": "p2_server_error", "code": code,
+                        "detail": f"Playwright: server error (HTTP {code})"}
+
+            if code == 404:
+                return {"raw": "p2_server_error", "code": code,
+                        "detail": "Playwright: HTTP 404 not found"}
+
+            # Successful load
             if code < 400:
                 return {"raw": "working", "code": code,
-                        "detail": f"Loaded successfully (HTTP {code})"}
+                        "detail": f"Playwright: loaded (HTTP {code})"}
 
-            # Other 4xx
-            return {"raw": "server_error", "code": code,
-                    "detail": f"Server returned error (HTTP {code})"}
+            # Other 4xx — ambiguous
+            return {"raw": "error", "code": code,
+                    "detail": f"Playwright: HTTP {code} — ambiguous"}
 
         except Exception as exc:
             return {"raw": "error", "code": None,
-                    "detail": f"Unexpected error: {str(exc)[:120]}"}
+                    "detail": f"Playwright outer error: {str(exc)[:120]}"}
         finally:
             if ctx:
                 try:
@@ -191,74 +359,84 @@ def _check_website(browser, url: str, domain_cache: dict):
                 except Exception:
                     pass
 
-    # ── Run up to 4 attempts ───────────────────────────────────────────────────
-    attempts = []
-    urls_seq  = [https_url, https_url, http_url, https_url]
-
-    for step_num, step_url in enumerate(urls_seq, start=1):
-        a = _attempt(step_url)
-        attempts.append(a)
+    # Two Playwright attempts
+    s2_results = []
+    for pw_num in range(1, 3):
+        s2 = _pw_attempt(https_url)
+        s2_results.append(s2)
         logging.info(
-            f"WS-check step {step_num}/4 ({step_url}): raw={a['raw']} "
-            f"code={a['code']} — {a['detail']}"
+            f"WS-check S2 attempt {pw_num}/2 ({https_url}): "
+            f"raw={s2['raw']} code={s2['code']} — {s2['detail']}"
         )
-
-        # Any positive signal → stop early, site is accessible
-        if a["raw"] in ("working", "protected"):
-            status = "Working" if a["raw"] == "working" else "Accessible but Protected"
-            reason = a["detail"]
-            conf   = 0
-            _log_debug(domain, attempts, status)
-            result = (status, reason, conf)
+        # Playwright found the site accessible → override Stage 1 failure
+        if s2["raw"] in ("working", "protected"):
+            status = "Working" if s2["raw"] == "working" else "Accessible but Protected"
+            result = (status, f"Accessible via browser — {s2['detail']}", 0)
+            _log_debug(domain, [s1] + s2_results, status)
             domain_cache[domain] = result
             return result
 
-    # ── Aggregate all 4 failed attempts ───────────────────────────────────────
-    raw_counts: Dict[str, int] = {}
-    for a in attempts:
-        raw_counts[a["raw"]] = raw_counts.get(a["raw"], 0) + 1
+    # ── Both stages failed — final classification ──────────────────────────────
+    all_results = [s1] + s2_results
 
-    dns_fails     = raw_counts.get("dns_fail",     0)
-    conn_refused  = raw_counts.get("conn_refused",  0)
-    server_errors = raw_counts.get("server_error",  0)
-    parked_hits   = raw_counts.get("parked",        0)
-    timeouts      = raw_counts.get("timeout",       0)
+    # Parked detected by Playwright
+    if any(r["raw"] == "parked" for r in s2_results):
+        result = ("Parked Domain", "The domain is parked or for sale.", 100)
+        _log_debug(domain, all_results, "Parked Domain")
+        domain_cache[domain] = result
+        return result
 
-    # DNS failure: even a single hit is conclusive (domain literally doesn't exist)
-    if dns_fails >= 1:
-        status = "Domain Not Found"
-        reason = "The domain does not exist (DNS resolution failed on multiple attempts)."
-        conf   = 100
-    # Parked domain: one confident detection is enough (body content is reliable)
-    elif parked_hits >= 1:
-        status = "Parked Domain"
-        reason = "The domain is parked or for sale."
-        conf   = 100
-    # Connection refused twice → server is down
-    elif conn_refused >= 2:
-        status = "Server Unreachable"
-        reason = "The server refused all connection attempts."
-        conf   = 95
-    # Server errors confirmed twice → real error
-    elif server_errors >= 2:
-        codes  = [a["code"] for a in attempts if a["raw"] == "server_error" and a["code"]]
-        code_s = "/".join(str(c) for c in codes[:2]) if codes else "unknown"
-        status = "Server Error"
-        reason = f"The server returned errors on multiple attempts (HTTP {code_s})."
-        conf   = 90
-    # All attempts timed out — very slow, but we can't confirm it's broken
-    elif timeouts == len(attempts):
-        status = "Very Slow but Working"
-        reason = "The website did not respond within 15 seconds on any attempt, but may still be accessible."
-        conf   = 0
-    else:
-        # Mixed failures — not enough evidence; treat as possibly working
-        status = "Very Slow but Working"
-        reason = "The website could not be fully loaded but there is insufficient evidence it is broken."
-        conf   = 0
+    # DNS failure — definitive even from Stage 1 alone (DNS won't change between attempts)
+    if s1["raw"] == "dns_fail" or any(r["raw"] == "dns_fail" for r in s2_results):
+        result = ("Domain Not Found",
+                  "The domain does not exist (DNS resolution failed).", 100)
+        _log_debug(domain, all_results, "Domain Not Found")
+        domain_cache[domain] = result
+        return result
 
-    _log_debug(domain, attempts, status)
-    result = (status, reason, conf)
+    # Connection refused — both stages must confirm
+    s2_conn = any(r["raw"] == "conn_refused" for r in s2_results)
+    if s1["raw"] == "conn_refused" and s2_conn:
+        result = ("Server Unreachable",
+                  "The server refused all connection attempts.", 95)
+        _log_debug(domain, all_results, "Server Unreachable")
+        domain_cache[domain] = result
+        return result
+
+    # Hard server error (non-503) — both stages must confirm
+    s1_hard_err = s1["raw"] == "s1_server_error"
+    s2_hard_err = any(r["raw"] == "p2_server_error" for r in s2_results)
+    if s1_hard_err and s2_hard_err:
+        codes  = [r["code"] for r in all_results if r.get("code")]
+        code_s = str(codes[0]) if codes else "unknown"
+        result = ("Server Error",
+                  f"The server returned errors on all checks (HTTP {code_s}).", 90)
+        _log_debug(domain, all_results, "Server Error")
+        domain_cache[domain] = result
+        return result
+
+    # 503 path — only broken if BOTH stages return server-level failures
+    # (503 + hard server error from Playwright counts; 503 + timeout does NOT)
+    s1_503 = s1["raw"] == "s1_503"
+    s2_503_hard = any(r["raw"] in ("p2_server_error", "p2_503") for r in s2_results)
+    # Require BOTH Playwright attempts to agree on a server-level failure
+    s2_both_503_hard = all(r["raw"] in ("p2_server_error", "p2_503", "conn_refused") for r in s2_results)
+    if s1_503 and s2_both_503_hard and s2_503_hard:
+        result = ("Server Error",
+                  "The server is unavailable (HTTP 503 confirmed by both HTTP and browser checks).", 90)
+        _log_debug(domain, all_results, "Server Error")
+        domain_cache[domain] = result
+        return result
+
+    # ── Conservative fallback — insufficient evidence → Working ───────────────
+    reason = (
+        f"Insufficient evidence of a broken site "
+        f"(HTTP check: {s1['raw']}, "
+        f"browser: {' / '.join(r['raw'] for r in s2_results)}). "
+        "Classified as working to avoid false positives."
+    )
+    result = ("Working", reason, 0)
+    _log_debug(domain, all_results, "Working (conservative fallback)")
     domain_cache[domain] = result
     return result
 
