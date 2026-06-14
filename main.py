@@ -114,9 +114,17 @@ def scrape_places(search_for: str, total: int) -> List[Place]:
     with sync_playwright() as p:
         if platform.system() == "Windows":
             browser_path = r"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
-            browser = p.chromium.launch(executable_path=browser_path, headless=False)
+            browser = p.chromium.launch(executable_path=browser_path, headless=True)
         else:
-            browser = p.chromium.launch(headless=False)
+            import shutil, glob as _glob
+            chromium_exec = shutil.which("chromium") or shutil.which("chromium-browser")
+            if not chromium_exec:
+                nix_candidates = _glob.glob("/nix/store/*-chromium-*/bin/chromium")
+                chromium_exec = nix_candidates[0] if nix_candidates else None
+            if chromium_exec:
+                browser = p.chromium.launch(executable_path=chromium_exec, headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            else:
+                browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
         page = browser.new_page()
         try:
             page.goto("https://www.google.com/maps/@32.9817464,70.1930781,3.67z?", timeout=60000)
