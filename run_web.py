@@ -161,6 +161,9 @@ td.td-rating{color:var(--warning);font-weight:700}
 td.td-status-open{color:var(--success);font-weight:600}
 td.td-status-closed{color:var(--danger);font-weight:600}
 td.td-status-dim{color:var(--muted)}
+td.td-opp-high{color:#f87171}
+td.td-opp-med{color:#facc15}
+td.td-opp-low{color:#4ade80}
 .empty-state{text-align:center;padding:60px 20px;color:var(--muted)}
 .empty-state .ei{font-size:44px;margin-bottom:10px}
 
@@ -239,6 +242,7 @@ td.td-status-dim{color:var(--muted)}
     <label class="f-check"><input type="checkbox" id="f-web"/>  Website required</label>
     <label class="f-check"><input type="checkbox" id="f-phone"/>  Phone required</label>
     <label class="f-check"><input type="checkbox" id="f-email"/>  Email required</label>
+    <label class="f-check"><input type="checkbox" id="f-no-web"/>  Only businesses without website</label>
   </div>
 
   <div class="sep"></div>
@@ -328,9 +332,10 @@ td.td-status-dim{color:var(--muted)}
         <th style="min-width:120px">Category</th>
         <th style="min-width:165px">Email</th>
         <th style="min-width:72px">Status</th>
+        <th style="min-width:130px">Opportunity</th>
       </tr></thead>
       <tbody id="results-body">
-        <tr id="empty-row"><td colspan="9">
+        <tr id="empty-row"><td colspan="10">
           <div class="empty-state">
             <div class="ei">🔍</div>
             <p>No results yet — enter a search and press Start Search</p>
@@ -438,6 +443,20 @@ function pushStats(place){
   document.getElementById('st-saved').textContent   = tot;
 }
 
+// ─── Opportunity ──────────────────────────────────────────────────────────
+function hasValidWebsite(place){
+  const ws = (place.website||'').trim();
+  return ws && ws !== '-' && ws !== '—' && (ws.includes('.')||ws.toLowerCase().includes('http'));
+}
+function getOpportunity(place){
+  if(!hasValidWebsite(place))
+    return {label:'🔥 High',   cls:'td-opp-high'};
+  const rev = parseInt(place.reviews_count)||0;
+  if(rev < 20)
+    return {label:'🟡 Medium', cls:'td-opp-med'};
+  return   {label:'🟢 Low',    cls:'td-opp-low'};
+}
+
 // ─── Table ────────────────────────────────────────────────────────────────
 function addRow(place){
   const tbody = document.getElementById('results-body');
@@ -447,6 +466,7 @@ function addRow(place){
   let   statusCls = 'td-status-dim', statusTxt = place.open_status || '—';
   if(place.open_status==='Open')   statusCls='td-status-open';
   if(place.open_status==='Closed') statusCls='td-status-closed';
+  const opp = getOpportunity(place);
 
   const tr = document.createElement('tr');
   tr.innerHTML = `
@@ -458,7 +478,8 @@ function addRow(place){
     <td>${reviews}</td>
     <td title="${esc(place.place_type)}">${esc(place.place_type||'—')}</td>
     <td class="td-email" title="${esc(place.email)}">${esc(place.email||'—')}</td>
-    <td class="${statusCls}">${esc(statusTxt)}</td>`;
+    <td class="${statusCls}">${esc(statusTxt)}</td>
+    <td class="${opp.cls}" style="font-weight:600">${opp.label}</td>`;
   tbody.appendChild(tr);
   tr.scrollIntoView({block:'nearest'});
 }
@@ -502,9 +523,10 @@ function getFilters(){
   const v = parseInt(document.getElementById('f-reviews').value);
   if(r>0)  f.min_rating  = r;
   if(v>0)  f.min_reviews = v;
-  if(document.getElementById('f-web').checked)   f.require_web   = true;
-  if(document.getElementById('f-phone').checked) f.require_phone = true;
-  if(document.getElementById('f-email').checked) f.require_email = true;
+  if(document.getElementById('f-web').checked)    f.require_web   = true;
+  if(document.getElementById('f-phone').checked)  f.require_phone = true;
+  if(document.getElementById('f-email').checked)  f.require_email = true;
+  if(document.getElementById('f-no-web').checked) f.no_website    = true;
   return f;
 }
 
@@ -732,6 +754,7 @@ def start():
     if raw_f.get("require_web"):   filters["require_web"]   = True
     if raw_f.get("require_phone"): filters["require_phone"] = True
     if raw_f.get("require_email"): filters["require_email"] = True
+    if raw_f.get("no_website"):    filters["no_website"]    = True
 
     # Reset state
     state["places"]        = []
@@ -879,14 +902,31 @@ def delete_session(sid):
 
 # ─── Export ───────────────────────────────────────────────────────────────────
 
+def _compute_opportunity(row) -> str:
+    ws = str(row.get("website") or "").strip()
+    has_web = bool(ws and ws != "-" and ws != "—" and ("." in ws or "http" in ws.lower()))
+    if not has_web:
+        return "High Opportunity"
+    try:
+        rev = int(row.get("reviews_count") or 0)
+    except Exception:
+        rev = 0
+    if rev < 20:
+        return "Medium Opportunity"
+    return "Low Opportunity"
+
+
 def _build_dataframe(session_id=None):
     import pandas as pd
     if session_id:
         rows = db.get_session_places(session_id)
-        return pd.DataFrame(rows).drop(columns=["id","session_id"], errors="ignore")
+        df = pd.DataFrame(rows).drop(columns=["id","session_id"], errors="ignore")
     else:
         from dataclasses import asdict as _ad
-        return pd.DataFrame([_ad(p) for p in state["places"]])
+        df = pd.DataFrame([_ad(p) for p in state["places"]])
+    if not df.empty:
+        df["opportunity"] = df.apply(_compute_opportunity, axis=1)
+    return df
 
 
 @app.route("/export/csv")

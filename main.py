@@ -278,6 +278,13 @@ def scrape_places(
                             filter_count += 1
                             skip = True
 
+                        if not skip and filters.get("no_website"):
+                            ws = (place.website or "").strip()
+                            has_web = bool(ws and ws != "-" and ("." in ws or "http" in ws.lower()))
+                            if has_web:
+                                filter_count += 1
+                                skip = True
+
                         if not skip and filters.get("require_phone") and not place.phone_number:
                             filter_count += 1
                             skip = True
