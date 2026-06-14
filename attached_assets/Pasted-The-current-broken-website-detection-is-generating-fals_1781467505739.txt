@@ -1,0 +1,113 @@
+The current broken website detection is generating false positives.
+
+The system must become much more conservative and prioritize accuracy over speed.
+
+I prefer missing some broken websites rather than flagging working websites as broken.
+
+A website should ONLY be considered broken after multiple verification steps.
+
+Step 1:
+Open the website with Playwright:
+
+page.goto(url, timeout=10000, wait_until="networkidle")
+
+Increase timeout from 5 seconds to 10 seconds.
+
+Allow all redirects.
+
+301 and 302 redirects should NOT be classified as broken.
+
+Many websites redirect from:
+
+http → https
+www → non-www
+old domain → new domain
+
+These are valid websites.
+
+If the first attempt fails:
+
+Wait 2 seconds.
+
+Try again.
+
+A website should only be classified as broken after 2 consecutive failures.
+
+The following situations should NOT automatically be considered broken:
+
+HTTP 403
+Cloudflare challenge pages
+"Checking your browser"
+Bot protection pages
+Cookie consent pages
+Login pages
+
+Classify them as:
+
+Protected Website
+
+because a human can still access them.
+
+Only classify a website as broken if one of these conditions is confirmed:
+
+Domain Not Found
+Examples:
+ERR_NAME_NOT_RESOLVED
+DNS failure
+NXDOMAIN
+Timeout
+The website failed twice and exceeded 10 seconds on both attempts.
+Domain Parking
+Examples:
+"This domain is for sale"
+"Buy this domain"
+"Sedo"
+"GoDaddy parked domain"
+"This website is coming soon"
+Server Error
+HTTP 500
+HTTP 502
+HTTP 503
+Connection refused
+
+Working
+Protected Website
+Timeout
+Domain Not Found
+Parked Domain
+Server Error
+
+The filter:
+
+☑ Only businesses with broken websites
+
+must ONLY include:
+
+Timeout
+Domain Not Found
+Parked Domain
+Server Error
+
+It must EXCLUDE:
+
+Working
+Protected Website
+Redirected websites
+Slow but functional websites
+
+Add:
+
+Website Confidence
+
+Examples:
+
+100% = Domain Not Found
+95% = Parked Domain
+90% = Server Error
+85% = Timeout after 2 failures
+50% = Protected Website
+0% = Working
+
+The objective is accuracy.
+
+I want real broken websites and as few false positives as possible, even if the validation process takes longer.

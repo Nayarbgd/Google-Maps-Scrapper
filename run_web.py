@@ -342,9 +342,10 @@ td.td-ws-dim{color:#6b7280}
         <th style="min-width:130px">Opportunity</th>
         <th style="min-width:110px">Website Status</th>
         <th style="min-width:210px">Website Error</th>
+        <th style="min-width:80px">Confidence</th>
       </tr></thead>
       <tbody id="results-body">
-        <tr id="empty-row"><td colspan="12">
+        <tr id="empty-row"><td colspan="13">
           <div class="empty-state">
             <div class="ei">🔍</div>
             <p>No results yet — enter a search and press Start Search</p>
@@ -457,9 +458,10 @@ function hasValidWebsite(place){
   const ws = (place.website||'').trim();
   return ws && ws !== '-' && ws !== '—' && (ws.includes('.')||ws.toLowerCase().includes('http'));
 }
+const _BROKEN_STATUSES = new Set(['Timeout','Domain Not Found','Parked Domain','Server Error']);
 function getOpportunity(place){
   const ws = place.website_status||'';
-  if(ws && ws !== 'Working')
+  if(ws && _BROKEN_STATUSES.has(ws))
     return {label:'🔥 Critical', cls:'td-opp-critical'};
   if(!hasValidWebsite(place))
     return {label:'🔥 High',     cls:'td-opp-high'};
@@ -472,12 +474,21 @@ function getWsCell(place){
   const s = place.website_status||'';
   if(!s) return {label:'—', cls:'td-ws-dim'};
   const map = {
-    'Working':          {label:'🟢 Working',          cls:'td-ws-working'},
-    'Broken':           {label:'🔴 Broken',            cls:'td-ws-broken'},
-    'Timeout':          {label:'🔴 Timeout',           cls:'td-ws-timeout'},
-    'Domain Not Found': {label:'🔴 Domain Not Found',  cls:'td-ws-notfound'},
+    'Working':           {label:'🟢 Working',           cls:'td-ws-working'},
+    'Protected Website': {label:'🟡 Protected',          cls:'td-ws-timeout'},
+    'Timeout':           {label:'🔴 Timeout',            cls:'td-ws-timeout'},
+    'Server Error':      {label:'🔴 Server Error',       cls:'td-ws-broken'},
+    'Parked Domain':     {label:'🔴 Parked Domain',      cls:'td-ws-broken'},
+    'Domain Not Found':  {label:'🔴 Domain Not Found',   cls:'td-ws-notfound'},
+    'Broken':            {label:'🔴 Broken',             cls:'td-ws-broken'},
   };
   return map[s] || {label:s, cls:'td-ws-dim'};
+}
+function fmtConfidence(place){
+  const c = place.website_confidence;
+  if(c === undefined || c === null || c < 0) return '—';
+  if(c === 0) return '—';
+  return c + '%';
 }
 
 // ─── Table ────────────────────────────────────────────────────────────────
@@ -506,7 +517,8 @@ function addRow(place){
     <td class="${statusCls}">${esc(statusTxt)}</td>
     <td class="${opp.cls}" style="font-weight:600">${opp.label}</td>
     <td class="${wsc.cls}">${wsc.label}</td>
-    <td class="td-ws-dim" title="${esc(wsErr)}">${esc(wsErr||'—')}</td>`;
+    <td class="td-ws-dim" title="${esc(wsErr)}">${esc(wsErr||'—')}</td>
+    <td class="td-ws-dim" style="text-align:center">${fmtConfidence(place)}</td>`;
   tbody.appendChild(tr);
   tr.scrollIntoView({block:'nearest'});
 }
@@ -567,7 +579,7 @@ async function startScrape(){
   const query = loc ? `${kw} in ${loc}` : kw;
 
   resetStats();
-  document.getElementById('results-body').innerHTML=`<tr id="empty-row"><td colspan="12"><div class="empty-state"><div class="ei">🔍</div><p>Searching…</p></div></td></tr>`;
+  document.getElementById('results-body').innerHTML=`<tr id="empty-row"><td colspan="13"><div class="empty-state"><div class="ei">🔍</div><p>Searching…</p></div></td></tr>`;
   document.getElementById('log-box').innerHTML='';
   setProgress(0,max); setExtras(0,0,0);
   document.getElementById('bar-fill').style.width='0%';
@@ -663,7 +675,7 @@ async function clearResults(){
   if(places.length && !confirm('Clear all current results from the view?')) return;
   await fetch('/clear',{method:'POST'});
   resetStats();
-  document.getElementById('results-body').innerHTML=`<tr id="empty-row"><td colspan="12"><div class="empty-state"><div class="ei">🔍</div><p>No results yet — enter a search query and press Start Search</p></div></td></tr>`;
+  document.getElementById('results-body').innerHTML=`<tr id="empty-row"><td colspan="13"><div class="empty-state"><div class="ei">🔍</div><p>No results yet — enter a search query and press Start Search</p></div></td></tr>`;
   document.getElementById('log-box').innerHTML='';
   document.getElementById('bar-fill').style.width='0%';
   document.getElementById('count-text').textContent='0 / 0';
@@ -931,9 +943,11 @@ def delete_session(sid):
 
 # ─── Export ───────────────────────────────────────────────────────────────────
 
+_BROKEN_STATUSES_PY = {"Timeout", "Domain Not Found", "Parked Domain", "Server Error"}
+
 def _compute_opportunity(row) -> str:
     ws_status = str(row.get("website_status") or "").strip()
-    if ws_status and ws_status != "Working":
+    if ws_status in _BROKEN_STATUSES_PY:
         return "Critical Opportunity"
     ws = str(row.get("website") or "").strip()
     has_web = bool(ws and ws != "-" and ws != "—" and ("." in ws or "http" in ws.lower()))

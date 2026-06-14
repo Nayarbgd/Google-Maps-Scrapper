@@ -29,6 +29,7 @@ class Place:
     introduction: str = ""
     website_status: str = ""
     website_error_reason: str = ""
+    website_confidence: int = -1
 
 
 def setup_logging():
@@ -41,9 +42,34 @@ def setup_logging():
 def _check_website(browser, url: str, domain_cache: dict):
     """
     Opens the URL in a fresh browser context and returns (status, reason).
-    status: "Working" | "Broken" | "Timeout" | "Domain Not Found"
-    Results are cached by domain so each domain is only tested once per session.
+    Conservative two-attempt website checker.
+    Returns (website_status, website_error_reason, website_confidence).
+    Prefers false negatives over false positives — a working site is never
+    flagged as broken on a single failure.
+
+    Statuses and confidence:
+        Working          →  0%
+        Protected Website→ 50%
+        Timeout          → 85%
+        Server Error     → 90%
+        Parked Domain    → 95%
+        Domain Not Found →100%
     """
+    _PARKED_PHRASES = [
+        "this domain is for sale", "buy this domain", "sedo",
+        "parked domain", "domain parking", "godaddy parked",
+        "this website is coming soon", "coming soon",
+        "purchase this domain", "domain may be for sale",
+        "domain for sale",
+    ]
+    _PROTECTED_PHRASES = [
+        "checking your browser", "just a moment", "cloudflare",
+        "bot protection", "verify you are human",
+        "please complete the security check",
+        "enable javascript and cookies",
+        "you need to enable javascript",
+    ]
+
     norm_url = url.strip()
     if not norm_url.startswith(("http://", "https://")):
         norm_url = "https://" + norm_url
@@ -57,36 +83,100 @@ def _check_website(browser, url: str, domain_cache: dict):
     if domain in domain_cache:
         return domain_cache[domain]
 
-    result = ("Broken", "The website returned an error page.")
-    try:
-        ctx = browser.new_context(ignore_https_errors=True)
-        check_page = ctx.new_page()
-        try:
-            response = check_page.goto(norm_url, timeout=5000, wait_until="domcontentloaded")
-            if response is None:
-                result = ("Broken", "The website did not return a response.")
-            elif response.status >= 400:
-                result = ("Broken", f"The website returned an error page (HTTP {response.status}).")
-            else:
-                result = ("Working", "")
-        except Exception as exc:
-            err = str(exc).lower()
-            if "name_not_resolved" in err or "err_name_not_resolved" in err:
-                result = ("Domain Not Found", "The domain does not exist.")
-            elif "timed_out" in err or "timeout" in err or "err_timed_out" in err:
-                result = ("Timeout", "The website did not respond within 5 seconds.")
-            else:
-                result = ("Broken", "The website returned an error page.")
-        finally:
-            try:
-                ctx.close()
-            except Exception:
-                pass
-    except Exception:
-        result = ("Broken", "Could not connect to the website.")
+    _UA = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    )
 
-    domain_cache[domain] = result
-    return result
+    def _single_attempt():
+        ctx = None
+        try:
+            ctx = browser.new_context(ignore_https_errors=True, user_agent=_UA)
+            pg = ctx.new_page()
+            try:
+                response = pg.goto(norm_url, timeout=10000, wait_until="networkidle")
+            except Exception as exc:
+                err = str(exc).lower()
+                if "name_not_resolved" in err or "err_name_not_resolved" in err:
+                    return ("Domain Not Found", "The domain does not exist.", 100)
+                if "timed_out" in err or "err_timed_out" in err or "timeout" in err:
+                    return ("Timeout", "The website did not respond within 10 seconds.", 85)
+                if "connection_refused" in err or "err_connection_refused" in err:
+                    return ("Server Error", "The server refused the connection.", 90)
+                if "ssl" in err or "cert" in err:
+                    return ("Server Error", "SSL/certificate error.", 85)
+                return ("Broken", "The website failed to load.", 75)
+
+            if response is None:
+                return ("Broken", "The website did not return a response.", 75)
+
+            code = response.status
+
+            if code in (500, 502, 503) or (code >= 500):
+                return ("Server Error", f"The website server returned an error (HTTP {code}).", 90)
+
+            if code == 403:
+                return ("Protected Website", "The website requires human verification (access restricted).", 50)
+
+            try:
+                body = pg.content().lower()
+            except Exception:
+                body = ""
+
+            for phrase in _PROTECTED_PHRASES:
+                if phrase in body:
+                    return ("Protected Website", "The website requires browser verification (bot protection active).", 50)
+
+            for phrase in _PARKED_PHRASES:
+                if phrase in body:
+                    return ("Parked Domain", "The domain is parked or for sale.", 95)
+
+            if code < 400:
+                return ("Working", "", 0)
+
+            return ("Broken", f"The website returned an error (HTTP {code}).", 75)
+
+        except Exception:
+            return ("Broken", "Could not connect to the website.", 70)
+        finally:
+            if ctx:
+                try:
+                    ctx.close()
+                except Exception:
+                    pass
+
+    # ── Attempt 1 ──
+    res1 = _single_attempt()
+
+    # Domain Not Found is definitive — no retry needed
+    if res1[0] == "Domain Not Found":
+        domain_cache[domain] = res1
+        return res1
+
+    # Working or Protected — conservative; accept immediately
+    if res1[0] in ("Working", "Protected Website"):
+        domain_cache[domain] = res1
+        return res1
+
+    # Any other failure → wait 2s and retry once
+    time.sleep(2)
+    res2 = _single_attempt()
+
+    # If second attempt is Working or Protected, trust it
+    if res2[0] in ("Working", "Protected Website"):
+        final = res2
+    # Both agree
+    elif res1[0] == res2[0]:
+        final = res1
+    else:
+        # Pick the more severe of the two results
+        _sev = {"Domain Not Found": 6, "Parked Domain": 5,
+                "Server Error": 4, "Timeout": 3, "Broken": 2}
+        final = res1 if _sev.get(res1[0], 1) >= _sev.get(res2[0], 1) else res2
+
+    domain_cache[domain] = final
+    return final
 
 
 def extract_text(page: Page, xpath: str) -> str:
@@ -319,10 +409,11 @@ def scrape_places(
                     ws_has_url = bool(ws_raw and ws_raw != "-" and ("." in ws_raw or "http" in ws_raw.lower()))
                     if ws_has_url:
                         try:
-                            ws_status, ws_reason = _check_website(browser, ws_raw, domain_cache)
+                            ws_status, ws_reason, ws_conf = _check_website(browser, ws_raw, domain_cache)
                             place.website_status = ws_status
                             place.website_error_reason = ws_reason
-                            logging.info(f"Website check [{ws_status}]: {ws_raw}")
+                            place.website_confidence = ws_conf
+                            logging.info(f"Website check [{ws_status} {ws_conf}%]: {ws_raw}")
                         except Exception as exc:
                             logging.warning(f"Website check failed for {ws_raw}: {exc}")
 
@@ -354,7 +445,8 @@ def scrape_places(
                                 skip = True
 
                         if not skip and filters.get("only_broken_websites"):
-                            if place.website_status == "Working" or not place.website_status:
+                            _broken = {"Timeout", "Domain Not Found", "Parked Domain", "Server Error"}
+                            if place.website_status not in _broken:
                                 filter_count += 1
                                 skip = True
 

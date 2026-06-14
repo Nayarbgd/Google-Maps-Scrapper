@@ -59,10 +59,11 @@ def init_db() -> None:
             scraped_at           TEXT,
             website_status       TEXT,
             website_error_reason TEXT,
+            website_confidence   INTEGER,
             FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
         )
     """)
-    for col, col_type in [("website_status", "TEXT"), ("website_error_reason", "TEXT")]:
+    for col, col_type in [("website_status", "TEXT"), ("website_error_reason", "TEXT"), ("website_confidence", "INTEGER")]:
         try:
             conn.execute(f"ALTER TABLE places ADD COLUMN {col} {col_type}")
         except Exception:
@@ -92,8 +93,8 @@ def save_place(session_id: int, place) -> None:
           (session_id, name, address, website, phone_number, email,
            reviews_count, reviews_average, place_type, opens_at, open_status,
            store_shopping, in_store_pickup, store_delivery, introduction, scraped_at,
-           website_status, website_error_reason)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           website_status, website_error_reason, website_confidence)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             session_id,
@@ -114,6 +115,7 @@ def save_place(session_id: int, place) -> None:
             datetime.now().isoformat(),
             d.get("website_status", ""),
             d.get("website_error_reason", ""),
+            d.get("website_confidence", -1),
         ),
     )
     conn.commit()
