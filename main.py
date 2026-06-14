@@ -644,7 +644,7 @@ def scrape_places(
                 if stop_event and stop_event.is_set():
                     break
                 page.mouse.wheel(0, 10000)
-                page.wait_for_selector('//a[contains(@href, "https://www.google.com/maps/place")]')
+                page.wait_for_timeout(1500)
                 found = page.locator('//a[contains(@href, "https://www.google.com/maps/place")]').count()
                 logging.info(f"Currently Found: {found}")
                 if found >= total:
