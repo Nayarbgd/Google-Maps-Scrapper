@@ -51,7 +51,58 @@ HTML = r"""<!DOCTYPE html>
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);font-size:14px}
-body{display:flex;overflow:hidden;height:100vh}
+body{display:flex;flex-direction:column;overflow:hidden;height:100vh}
+
+/* ── App Nav ────────────────────────────────── */
+#app-nav{display:flex;align-items:center;background:#0c0c14;border-bottom:1px solid var(--border);padding:0 18px;flex-shrink:0;gap:4px;height:42px}
+.nav-tab{padding:7px 18px;border:none;border-radius:6px;background:transparent;color:var(--muted);font-size:13px;font-weight:600;cursor:pointer;transition:background .15s,color .15s;letter-spacing:.2px}
+.nav-tab:hover{background:var(--border);color:var(--text)}
+.nav-tab.active{background:var(--accent);color:#fff}
+.nav-brand{font-size:13px;font-weight:700;color:var(--accent);margin-right:14px;letter-spacing:.3px}
+
+/* ── Views ──────────────────────────────────── */
+#view-scraper{display:flex;flex:1;overflow:hidden}
+#view-pipeline{display:none;flex:1;flex-direction:column;overflow:hidden}
+
+/* ── Pipeline stats bar ─────────────────────── */
+#pl-stats-bar{display:flex;background:var(--card2);border-bottom:1px solid var(--border);flex-shrink:0}
+.pl-stat{flex:1;padding:10px 0;text-align:center;border-right:1px solid var(--border);cursor:pointer;transition:background .15s}
+.pl-stat:last-child{border-right:none}
+.pl-stat:hover{background:rgba(79,142,247,.07)}
+.pl-stat.active-filter{background:rgba(79,142,247,.13)}
+.pl-stat-num{display:block;font-size:18px;font-weight:800;line-height:1.2}
+.pl-stat-lbl{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+.pls-total{color:var(--accent)}.pls-tc{color:var(--warning)}.pls-ct{color:#60a5fa}.pls-ic{color:var(--success)}.pls-cs{color:#c084fc}.pls-lost{color:var(--danger)}
+
+/* ── Pipeline filter bar ────────────────────── */
+#pl-filter-bar{display:flex;align-items:center;gap:6px;padding:8px 16px;background:var(--sidebar);border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap}
+.pl-fbtn{padding:5px 12px;border:1px solid var(--border);border-radius:99px;background:transparent;color:var(--muted);font-size:11px;font-weight:600;cursor:pointer;transition:background .15s,color .15s,border-color .15s;white-space:nowrap}
+.pl-fbtn:hover{background:var(--border);color:var(--text)}
+.pl-fbtn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+#pl-filter-bar .fl-label{font-size:10px;color:var(--muted);font-weight:700;letter-spacing:.5px;margin-right:4px}
+
+/* ── Pipeline table ─────────────────────────── */
+#pl-table-wrap{flex:1;overflow:auto;background:var(--tree-bg)}
+#pl-table-wrap table{width:100%;border-collapse:collapse;font-size:12px}
+#pl-table-wrap thead th{position:sticky;top:0;background:var(--tree-head);color:var(--accent);font-size:10px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;padding:9px 12px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap;z-index:2}
+#pl-table-wrap tbody tr{border-bottom:1px solid rgba(42,42,69,.4);transition:background .1s}
+#pl-table-wrap tbody tr:nth-child(even){background:rgba(26,26,46,.5)}
+#pl-table-wrap tbody tr:hover{background:rgba(79,142,247,.08)}
+#pl-table-wrap tbody td{padding:6px 10px;vertical-align:middle}
+.pl-status-sel{background:var(--card);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:11px;padding:4px 6px;outline:none;cursor:pointer;width:100%}
+.pl-status-sel:focus{border-color:var(--accent)}
+.pl-notes-inp{background:var(--card);border:1px solid var(--border);border-radius:5px;color:var(--text);font-size:11px;padding:4px 8px;outline:none;width:100%;min-width:140px}
+.pl-notes-inp:focus{border-color:var(--accent)}
+.pl-del-btn{background:#2e1a1a;color:var(--danger);border:1px solid var(--danger);border-radius:5px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer}
+.pl-del-btn:hover{background:#5a2d2d}
+.pl-empty{text-align:center;padding:60px 20px;color:var(--muted)}
+.pl-empty .ei{font-size:44px;margin-bottom:10px}
+
+/* ── Add to Pipeline button ─────────────────── */
+.btn-pipeline{background:transparent;border:1px solid #6d28d9;color:#a78bfa;border-radius:5px;padding:3px 9px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;transition:background .15s}
+.btn-pipeline:hover{background:#2d1f4e}
+.btn-pipeline.in-pipe{border-color:var(--success);color:var(--success)}
+.btn-pipeline.in-pipe:hover{background:#1a2e1a}
 
 /* ── Scrollbar ─────────────────────────────── */
 ::-webkit-scrollbar{width:5px;height:5px}
@@ -210,6 +261,16 @@ td.td-ws-dim{color:#6b7280}
 </head>
 <body>
 
+<!-- ═══════════════ NAV ═════════════════ -->
+<div id="app-nav">
+  <span class="nav-brand">🗺&nbsp; Maps Lead Generator</span>
+  <button class="nav-tab active" id="nav-scraper" onclick="switchView('scraper')">🔍&nbsp; Scraper</button>
+  <button class="nav-tab"        id="nav-pipeline" onclick="switchView('pipeline')">📋&nbsp; My Pipeline</button>
+</div>
+
+<!-- ═══════════════ SCRAPER VIEW ════════ -->
+<div id="view-scraper">
+
 <!-- ═══════════════ SIDEBAR ═══════════════ -->
 <div id="sidebar">
   <div class="logo">
@@ -344,9 +405,10 @@ td.td-ws-dim{color:#6b7280}
         <th style="min-width:110px">Website Status</th>
         <th style="min-width:210px">Website Error</th>
         <th style="min-width:80px">Confidence</th>
+        <th style="min-width:90px">Pipeline</th>
       </tr></thead>
       <tbody id="results-body">
-        <tr id="empty-row"><td colspan="13">
+        <tr id="empty-row"><td colspan="14">
           <div class="empty-state">
             <div class="ei">🔍</div>
             <p>No results yet — enter a search and press Start Search</p>
@@ -362,6 +424,76 @@ td.td-ws-dim{color:#6b7280}
     <div id="log-box"></div>
   </div>
 </div>
+
+</div><!-- /view-scraper -->
+
+<!-- ═══════════════ PIPELINE VIEW ═══════════ -->
+<div id="view-pipeline">
+
+  <!-- Stats bar -->
+  <div id="pl-stats-bar">
+    <div class="pl-stat active-filter" data-filter="all" onclick="plFilter('all')">
+      <span class="pl-stat-num pls-total" id="pls-total">0</span>
+      <span class="pl-stat-lbl">Total</span>
+    </div>
+    <div class="pl-stat" data-filter="🟡 To Contact" onclick="plFilter('🟡 To Contact')">
+      <span class="pl-stat-num pls-tc" id="pls-tc">0</span>
+      <span class="pl-stat-lbl">To Contact</span>
+    </div>
+    <div class="pl-stat" data-filter="🔵 Contacted" onclick="plFilter('🔵 Contacted')">
+      <span class="pl-stat-num pls-ct" id="pls-ct">0</span>
+      <span class="pl-stat-lbl">Contacted</span>
+    </div>
+    <div class="pl-stat" data-filter="🟢 In Conversation" onclick="plFilter('🟢 In Conversation')">
+      <span class="pl-stat-num pls-ic" id="pls-ic">0</span>
+      <span class="pl-stat-lbl">In Conversation</span>
+    </div>
+    <div class="pl-stat" data-filter="📅 Call Scheduled" onclick="plFilter('📅 Call Scheduled')">
+      <span class="pl-stat-num pls-cs" id="pls-cs">0</span>
+      <span class="pl-stat-lbl">Call Scheduled</span>
+    </div>
+    <div class="pl-stat" data-filter="❌ Lost" onclick="plFilter('❌ Lost')">
+      <span class="pl-stat-num pls-lost" id="pls-lost">0</span>
+      <span class="pl-stat-lbl">Lost</span>
+    </div>
+  </div>
+
+  <!-- Filter bar -->
+  <div id="pl-filter-bar">
+    <span class="fl-label">FILTER:</span>
+    <button class="pl-fbtn active" data-filter="all"                onclick="plFilter('all')">All</button>
+    <button class="pl-fbtn"        data-filter="🟡 To Contact"      onclick="plFilter('🟡 To Contact')">🟡 To Contact</button>
+    <button class="pl-fbtn"        data-filter="🔵 Contacted"       onclick="plFilter('🔵 Contacted')">🔵 Contacted</button>
+    <button class="pl-fbtn"        data-filter="🟢 In Conversation" onclick="plFilter('🟢 In Conversation')">🟢 In Conversation</button>
+    <button class="pl-fbtn"        data-filter="📅 Call Scheduled"  onclick="plFilter('📅 Call Scheduled')">📅 Call Scheduled</button>
+    <button class="pl-fbtn"        data-filter="❌ Lost"            onclick="plFilter('❌ Lost')">❌ Lost</button>
+  </div>
+
+  <!-- Table -->
+  <div id="pl-table-wrap">
+    <table>
+      <thead><tr>
+        <th style="min-width:200px">Business Name</th>
+        <th style="min-width:120px">Phone</th>
+        <th style="min-width:160px">Website</th>
+        <th style="min-width:170px">Email</th>
+        <th style="min-width:170px">Status</th>
+        <th style="min-width:200px">Notes</th>
+        <th style="min-width:100px">Date Added</th>
+        <th style="min-width:80px">Actions</th>
+      </tr></thead>
+      <tbody id="pl-tbody">
+        <tr id="pl-empty-row"><td colspan="8">
+          <div class="pl-empty">
+            <div class="ei">📋</div>
+            <p>No leads yet — add businesses from the Scraper results</p>
+          </div>
+        </td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</div><!-- /view-pipeline -->
 
 <!-- ═══════════════ SESSION MODAL ══════════ -->
 <div class="modal-overlay" id="session-modal">
@@ -382,6 +514,9 @@ td.td-ws-dim{color:#6b7280}
 // ─── State ────────────────────────────────────────────────────────────────
 let places      = [];
 let stats       = { webCnt:0, emailCnt:0, ratingSum:0, ratingCnt:0, reviewsSum:0 };
+let plData      = [];   // pipeline rows from server
+let plNames     = new Set();  // pipeline business names (for duplicate check)
+let plActiveFilter = 'all';
 let currentCnt  = 0;
 let totalExp    = 0;
 let startTime   = null;
@@ -505,6 +640,7 @@ function addRow(place){
   const wsc = getWsCell(place);
   const wsErr = (place.website_error_reason||'').trim();
 
+  const inPipe = plNames.has((place.name||'').trim());
   const tr = document.createElement('tr');
   tr.innerHTML = `
     <td class="td-name"  title="${esc(place.name)}">${esc(place.name)}</td>
@@ -519,7 +655,10 @@ function addRow(place){
     <td class="${opp.cls}" style="font-weight:600">${opp.label}</td>
     <td class="${wsc.cls}">${wsc.label}</td>
     <td class="td-ws-dim" title="${esc(wsErr)}">${esc(wsErr||'—')}</td>
-    <td class="td-ws-dim" style="text-align:center">${fmtConfidence(place)}</td>`;
+    <td class="td-ws-dim" style="text-align:center">${fmtConfidence(place)}</td>
+    <td style="text-align:center"><button class="btn-pipeline${inPipe?' in-pipe':''}" onclick="addToPipeline(this,'${esc(place.name).replace(/'/g,"\\'")}','${esc(place.phone_number||'').replace(/'/g,"\\'")}','${esc(place.website||'').replace(/'/g,"\\'")}','${esc(place.email||'').replace(/'/g,"\\'")}')">
+      ${inPipe?'✓ Added':'+ Pipeline'}
+    </button></td>`;
   tbody.appendChild(tr);
   tr.scrollIntoView({block:'nearest'});
 }
@@ -580,7 +719,7 @@ async function startScrape(){
   const query = loc ? `${kw} in ${loc}` : kw;
 
   resetStats();
-  document.getElementById('results-body').innerHTML=`<tr id="empty-row"><td colspan="13"><div class="empty-state"><div class="ei">🔍</div><p>Searching…</p></div></td></tr>`;
+  document.getElementById('results-body').innerHTML=`<tr id="empty-row"><td colspan="14"><div class="empty-state"><div class="ei">🔍</div><p>Searching…</p></div></td></tr>`;
   document.getElementById('log-box').innerHTML='';
   setProgress(0,max); setExtras(0,0,0);
   document.getElementById('bar-fill').style.width='0%';
@@ -676,7 +815,7 @@ async function clearResults(){
   if(places.length && !confirm('Clear all current results from the view?')) return;
   await fetch('/clear',{method:'POST'});
   resetStats();
-  document.getElementById('results-body').innerHTML=`<tr id="empty-row"><td colspan="13"><div class="empty-state"><div class="ei">🔍</div><p>No results yet — enter a search query and press Start Search</p></div></td></tr>`;
+  document.getElementById('results-body').innerHTML=`<tr id="empty-row"><td colspan="14"><div class="empty-state"><div class="ei">🔍</div><p>No results yet — enter a search query and press Start Search</p></div></td></tr>`;
   document.getElementById('log-box').innerHTML='';
   document.getElementById('bar-fill').style.width='0%';
   document.getElementById('count-text').textContent='0 / 0';
@@ -759,6 +898,146 @@ async function deleteSession(id){
 
 // Close modal on overlay click
 document.getElementById('session-modal').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeModal(); });
+
+// ─── View switching ────────────────────────────────────────────────────────
+function switchView(view){
+  document.getElementById('view-scraper').style.display  = view==='scraper'  ? 'flex' : 'none';
+  document.getElementById('view-pipeline').style.display = view==='pipeline' ? 'flex' : 'none';
+  document.getElementById('nav-scraper').classList.toggle('active',  view==='scraper');
+  document.getElementById('nav-pipeline').classList.toggle('active', view==='pipeline');
+  if(view==='pipeline') plLoadAll();
+}
+
+// ─── Pipeline: load & render ───────────────────────────────────────────────
+async function plLoadAll(){
+  const resp = await fetch('/api/pipeline');
+  const d    = await resp.json();
+  plData  = d.entries || [];
+  plNames = new Set(plData.map(r=>r.business_name.trim()));
+  plRenderTable();
+  plUpdateStats();
+}
+
+function plRenderTable(){
+  const tbody = document.getElementById('pl-tbody');
+  const rows  = plActiveFilter==='all' ? plData : plData.filter(r=>r.status===plActiveFilter);
+  if(!rows.length){
+    tbody.innerHTML=`<tr id="pl-empty-row"><td colspan="8"><div class="pl-empty"><div class="ei">📋</div><p>${plActiveFilter==='all'?'No leads yet — add businesses from the Scraper results':'No leads matching this filter.'}</p></div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = rows.map(r=>plRowHtml(r)).join('');
+  // Attach debounced notes listeners
+  tbody.querySelectorAll('.pl-notes-inp').forEach(inp=>{
+    let t;
+    inp.addEventListener('input', ()=>{
+      clearTimeout(t);
+      t = setTimeout(()=>plPatch(inp.dataset.id, null, inp.value), 600);
+    });
+  });
+}
+
+function plRowHtml(r){
+  const statuses = ['🟡 To Contact','🔵 Contacted','🟢 In Conversation','📅 Call Scheduled','❌ Lost'];
+  const opts = statuses.map(s=>`<option value="${s}"${r.status===s?' selected':''}>${s}</option>`).join('');
+  const d = r.date_added ? r.date_added.slice(0,10) : '—';
+  return `<tr id="plr-${r.id}">
+    <td class="td-name" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.business_name)}">${esc(r.business_name)}</td>
+    <td class="td-phone">${esc(r.phone||'—')}</td>
+    <td class="td-web" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.website||'—')}</td>
+    <td class="td-email" style="max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.email||'—')}</td>
+    <td><select class="pl-status-sel" data-id="${r.id}" onchange="plPatch(this.dataset.id,this.value,null)">${opts}</select></td>
+    <td><input class="pl-notes-inp" type="text" data-id="${r.id}" value="${esc(r.notes||'')}" placeholder="Quick note…"/></td>
+    <td style="color:var(--muted);font-size:11px;white-space:nowrap">${d}</td>
+    <td><button class="pl-del-btn" onclick="plDelete(${r.id},'${esc(r.business_name).replace(/'/g,"\\'")}')">🗑 Delete</button></td>
+  </tr>`;
+}
+
+function plUpdateStats(){
+  const counts = {'🟡 To Contact':0,'🔵 Contacted':0,'🟢 In Conversation':0,'📅 Call Scheduled':0,'❌ Lost':0};
+  plData.forEach(r=>{ if(counts[r.status]!==undefined) counts[r.status]++; });
+  document.getElementById('pls-total').textContent   = plData.length;
+  document.getElementById('pls-tc').textContent      = counts['🟡 To Contact'];
+  document.getElementById('pls-ct').textContent      = counts['🔵 Contacted'];
+  document.getElementById('pls-ic').textContent      = counts['🟢 In Conversation'];
+  document.getElementById('pls-cs').textContent      = counts['📅 Call Scheduled'];
+  document.getElementById('pls-lost').textContent    = counts['❌ Lost'];
+}
+
+function plFilter(val){
+  plActiveFilter = val;
+  // Update filter bar buttons
+  document.querySelectorAll('.pl-fbtn').forEach(b=>b.classList.toggle('active', b.dataset.filter===val));
+  // Update stat bar highlight
+  document.querySelectorAll('.pl-stat').forEach(s=>s.classList.toggle('active-filter', s.dataset.filter===val));
+  plRenderTable();
+}
+
+// ─── Pipeline: add from scraper ────────────────────────────────────────────
+async function addToPipeline(btn, name, phone, website, email){
+  if(plNames.has(name.trim())){
+    showToast(`⚠ "${name}" is already in your Pipeline`);
+    return;
+  }
+  btn.disabled = true;
+  try{
+    const resp = await fetch('/api/pipeline/add',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({business_name:name, phone, website, email})
+    });
+    const d = await resp.json();
+    if(d.duplicate){
+      showToast(`⚠ Already in Pipeline`);
+      btn.textContent='✓ Added'; btn.classList.add('in-pipe');
+      plNames.add(name.trim());
+      return;
+    }
+    if(d.entry){
+      plData.unshift(d.entry);
+      plNames.add(name.trim());
+      btn.textContent='✓ Added'; btn.classList.add('in-pipe');
+      plUpdateStats();
+      showToast(`✅ Added to Pipeline`);
+    }
+  } catch(e){
+    showToast('Error adding to pipeline');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ─── Pipeline: patch (status / notes) ─────────────────────────────────────
+async function plPatch(id, status, notes){
+  const body = {};
+  if(status !== null) body.status = status;
+  if(notes  !== null) body.notes  = notes;
+  await fetch(`/api/pipeline/${id}`,{
+    method:'PATCH',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body)
+  });
+  // Update local data
+  const row = plData.find(r=>r.id==id);
+  if(row){
+    if(status !== null) row.status = status;
+    if(notes  !== null) row.notes  = notes;
+  }
+  plUpdateStats();
+}
+
+// ─── Pipeline: delete ──────────────────────────────────────────────────────
+async function plDelete(id, name){
+  if(!confirm(`Remove "${name}" from your Pipeline?`)) return;
+  await fetch(`/api/pipeline/${id}`,{method:'DELETE'});
+  plData  = plData.filter(r=>r.id!==id);
+  plNames = new Set(plData.map(r=>r.business_name.trim()));
+  plUpdateStats();
+  plRenderTable();
+  showToast('Lead removed from Pipeline');
+}
+
+// Load pipeline names on page load so "Add to Pipeline" buttons reflect current state
+(async()=>{ try{ const r=await fetch('/api/pipeline'); const d=await r.json(); plData=d.entries||[]; plNames=new Set(plData.map(x=>x.business_name.trim())); }catch(e){} })();
 </script>
 </body>
 </html>"""
@@ -1070,6 +1349,47 @@ def test_url():
         })
     except Exception as e:
         return jsonify({"error": str(e)})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─── Pipeline API ─────────────────────────────────────────────────────────────
+
+@app.route("/api/pipeline")
+def api_pipeline_list():
+    return jsonify({"entries": db.pipeline_list()})
+
+
+@app.route("/api/pipeline/add", methods=["POST"])
+def api_pipeline_add():
+    data = request.get_json() or {}
+    name = (data.get("business_name") or "").strip()
+    if not name:
+        return jsonify({"error": "business_name required"}), 400
+    entry = db.pipeline_add(
+        name,
+        data.get("phone", ""),
+        data.get("website", ""),
+        data.get("email", ""),
+    )
+    if entry is None:
+        return jsonify({"duplicate": True})
+    return jsonify({"entry": entry})
+
+
+@app.route("/api/pipeline/<int:pid>", methods=["PATCH"])
+def api_pipeline_patch(pid):
+    data   = request.get_json() or {}
+    status = data.get("status")
+    notes  = data.get("notes")
+    ok     = db.pipeline_update(pid, status=status, notes=notes)
+    return jsonify({"ok": ok})
+
+
+@app.route("/api/pipeline/<int:pid>", methods=["DELETE"])
+def api_pipeline_delete(pid):
+    ok = db.pipeline_delete(pid)
+    return jsonify({"ok": ok})
 
 
 # ─────────────────────────────────────────────────────────────────────────────

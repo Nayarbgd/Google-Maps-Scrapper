@@ -1,0 +1,45 @@
+Add a second page to the application called "My Pipeline" — a simple personal CRM to track leads I've selected from my scraping results. Here are the full requirements:
+NAVIGATION
+
+Add a second tab/button in the main navigation called 'My Pipeline' that switches between the current scraper view and the new CRM view. Both views share the same page (no full reload), just toggle visibility.
+MOVING LEADS TO PIPELINE
+
+In the results table of the scraper (first view), add a button or checkbox per row called 'Add to Pipeline'. When clicked, that business is copied to the Pipeline with these fields only: Business Name, Phone, Website (can be empty), Email (can be empty). No duplicates — if the business is already in the Pipeline, show a small warning instead of adding it twice.
+PIPELINE VIEW — TABLE STRUCTURE
+
+The Pipeline table has these columns:
+
+Business Name
+Phone
+Website
+Email
+Status (dropdown per row with exactly these options: 🟡 To Contact / 🔵 Contacted / 🟢 In Conversation / 📅 Call Scheduled / ❌ Lost)
+Notes (a small free-text input per row, single line, for quick notes like 'called twice, no answer')
+Date Added (auto-filled when added, not editable)
+Actions: a Delete button per row to remove from pipeline
+
+Default status when added: 🟡 To Contact.
+PERSISTENCE — CRITICAL
+
+The Pipeline data must persist permanently using SQLite (same database file already used by the app in database/db.py). Create a new table called pipeline with columns: id, business_name, phone, website, email, status, notes, date_added.
+Every change the user makes (status change, notes edit, delete) must save to SQLite immediately and automatically — no Save button needed. When the app restarts and the user opens the Pipeline tab, all their data must be exactly as they left it.
+PIPELINE STATS BAR
+
+Above the table, show a simple stats bar with live counts: Total | To Contact | Contacted | In Conversation | Call Scheduled | Lost. Updates instantly when statuses change.
+FILTER BY STATUS
+
+Add a simple filter row above the table so the user can click a status to show only those rows (e.g. 'show only In Conversation'). Default: show all.
+VISUAL STYLE
+
+Match the existing dark UI of the application exactly — same colors, same font, same card/table style. The Pipeline tab should feel like a native part of the app, not something added on top.
+BACKEND
+
+Add the necessary API endpoints to run_web.py:
+
+POST /api/pipeline/add — add a lead to pipeline
+GET /api/pipeline — get all pipeline entries
+PATCH /api/pipeline/:id — update status or notes
+DELETE /api/pipeline/:id — remove a lead
+
+Add the pipeline table creation to the existing db.py database initialization so it's created automatically on first run.
+Do not touch any existing scraper logic, filters, or export functionality. Only add — do not modify what already works."

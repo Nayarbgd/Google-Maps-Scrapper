@@ -4,6 +4,7 @@ SQLite session manager for the Google Maps Scraper.
 Tables:
     sessions — one row per scrape run
     places   — one row per business, linked to a session
+    pipeline — personal CRM leads selected from scrape results
 """
 import sqlite3
 import json
@@ -68,6 +69,18 @@ def init_db() -> None:
             conn.execute(f"ALTER TABLE places ADD COLUMN {col} {col_type}")
         except Exception:
             pass
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS pipeline (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            business_name TEXT    NOT NULL,
+            phone         TEXT    DEFAULT '',
+            website       TEXT    DEFAULT '',
+            email         TEXT    DEFAULT '',
+            status        TEXT    DEFAULT '🟡 To Contact',
+            notes         TEXT    DEFAULT '',
+            date_added    TEXT    NOT NULL
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -164,3 +177,54 @@ def delete_session(session_id: int) -> None:
 def places_to_dataframe(places: List[Dict]):
     import pandas as pd
     return pd.DataFrame(places)
+
+
+# ── Pipeline CRUD ─────────────────────────────────────────────────────────────
+
+def pipeline_add(business_name: str, phone: str = '', website: str = '', email: str = '') -> Optional[Dict]:
+    conn = _connect()
+    existing = conn.execute(
+        "SELECT id FROM pipeline WHERE business_name=?", (business_name,)
+    ).fetchone()
+    if existing:
+        conn.close()
+        return None
+    cur = conn.execute(
+        "INSERT INTO pipeline (business_name, phone, website, email, status, notes, date_added) VALUES (?,?,?,?,?,?,?)",
+        (business_name, phone or '', website or '', email or '', '🟡 To Contact', '', datetime.now().isoformat()),
+    )
+    row_id = cur.lastrowid
+    conn.commit()
+    row = conn.execute("SELECT * FROM pipeline WHERE id=?", (row_id,)).fetchone()
+    conn.close()
+    return dict(row)
+
+
+def pipeline_list() -> List[Dict]:
+    conn = _connect()
+    rows = conn.execute("SELECT * FROM pipeline ORDER BY date_added DESC").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def pipeline_update(row_id: int, status: Optional[str] = None, notes: Optional[str] = None) -> bool:
+    conn = _connect()
+    if status is not None and notes is not None:
+        conn.execute("UPDATE pipeline SET status=?, notes=? WHERE id=?", (status, notes, row_id))
+    elif status is not None:
+        conn.execute("UPDATE pipeline SET status=? WHERE id=?", (status, row_id))
+    elif notes is not None:
+        conn.execute("UPDATE pipeline SET notes=? WHERE id=?", (notes, row_id))
+    conn.commit()
+    affected = conn.execute("SELECT changes()").fetchone()[0]
+    conn.close()
+    return affected > 0
+
+
+def pipeline_delete(row_id: int) -> bool:
+    conn = _connect()
+    conn.execute("DELETE FROM pipeline WHERE id=?", (row_id,))
+    conn.commit()
+    affected = conn.execute("SELECT changes()").fetchone()[0]
+    conn.close()
+    return affected > 0
