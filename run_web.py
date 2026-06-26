@@ -397,18 +397,16 @@ td.td-ws-dim{color:#6b7280}
         <th style="min-width:150px">Website</th>
         <th style="min-width:190px">Address</th>
         <th style="min-width:62px">Rating</th>
-        <th style="min-width:72px">Reviews</th>
         <th style="min-width:120px">Category</th>
         <th style="min-width:165px">Email</th>
         <th style="min-width:72px">Status</th>
         <th style="min-width:130px">Opportunity</th>
         <th style="min-width:110px">Website Status</th>
         <th style="min-width:210px">Website Error</th>
-        <th style="min-width:80px">Confidence</th>
         <th style="min-width:90px">Pipeline</th>
       </tr></thead>
       <tbody id="results-body">
-        <tr id="empty-row"><td colspan="14">
+        <tr id="empty-row"><td colspan="12">
           <div class="empty-state">
             <div class="ei">🔍</div>
             <p>No results yet — enter a search and press Start Search</p>
@@ -648,14 +646,12 @@ function addRow(place){
     <td class="td-web"   title="${esc(place.website)}">${esc(place.website||'—')}</td>
     <td title="${esc(place.address)}">${esc(place.address||'—')}</td>
     <td class="td-rating">${rating}</td>
-    <td>${reviews}</td>
     <td title="${esc(place.place_type)}">${esc(place.place_type||'—')}</td>
     <td class="td-email" title="${esc(place.email)}">${esc(place.email||'—')}</td>
     <td class="${statusCls}">${esc(statusTxt)}</td>
     <td class="${opp.cls}" style="font-weight:600">${opp.label}</td>
     <td class="${wsc.cls}">${wsc.label}</td>
     <td class="td-ws-dim" title="${esc(wsErr)}">${esc(wsErr||'—')}</td>
-    <td class="td-ws-dim" style="text-align:center">${fmtConfidence(place)}</td>
     <td style="text-align:center"><button class="btn-pipeline${inPipe?' in-pipe':''}" onclick="addToPipeline(this,'${esc(place.name).replace(/'/g,"\\'")}','${esc(place.phone_number||'').replace(/'/g,"\\'")}','${esc(place.website||'').replace(/'/g,"\\'")}','${esc(place.email||'').replace(/'/g,"\\'")}')">
       ${inPipe?'✓ Added':'+ Pipeline'}
     </button></td>`;
@@ -719,7 +715,7 @@ async function startScrape(){
   const query = loc ? `${kw} in ${loc}` : kw;
 
   resetStats();
-  document.getElementById('results-body').innerHTML=`<tr id="empty-row"><td colspan="14"><div class="empty-state"><div class="ei">🔍</div><p>Searching…</p></div></td></tr>`;
+  document.getElementById('results-body').innerHTML=`<tr id="empty-row"><td colspan="12"><div class="empty-state"><div class="ei">🔍</div><p>Searching…</p></div></td></tr>`;
   document.getElementById('log-box').innerHTML='';
   setProgress(0,max); setExtras(0,0,0);
   document.getElementById('bar-fill').style.width='0%';
@@ -815,7 +811,7 @@ async function clearResults(){
   if(places.length && !confirm('Clear all current results from the view?')) return;
   await fetch('/clear',{method:'POST'});
   resetStats();
-  document.getElementById('results-body').innerHTML=`<tr id="empty-row"><td colspan="14"><div class="empty-state"><div class="ei">🔍</div><p>No results yet — enter a search query and press Start Search</p></div></td></tr>`;
+  document.getElementById('results-body').innerHTML=`<tr id="empty-row"><td colspan="12"><div class="empty-state"><div class="ei">🔍</div><p>No results yet — enter a search query and press Start Search</p></div></td></tr>`;
   document.getElementById('log-box').innerHTML='';
   document.getElementById('bar-fill').style.width='0%';
   document.getElementById('count-text').textContent='0 / 0';
